@@ -1,5 +1,6 @@
 package com.clockin.apptester
 
+import android.util.Log
 import com.clockin.apptester.model.RecordedStep
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,6 +52,10 @@ object RecorderBridge {
 
     internal fun appendLog(line: String) {
         _replayLog.update { it + line }
+        // Also goes to logcat (tag TesterReplayLog) - the in-app Replay Log list is
+        // memory-only and disappears if the process dies, so this is the only way to
+        // recover a replay's results after the fact.
+        Log.d("TesterReplayLog", line)
     }
 
     internal fun replayFinished() {

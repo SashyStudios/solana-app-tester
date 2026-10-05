@@ -388,17 +388,25 @@ class RecordingAccessibilityService : AccessibilityService() {
                     broke = true
                     break
                 }
-                val target = findNode(root, step)
+                val result = findNode(root, step)
                 root.recycle()
-                if (target == null) {
+                if (result == null) {
+                    val searchedText = step.preTapText ?: step.preTapContentDescription ?: step.text ?: step.contentDescription
                     RecorderBridge.appendLog(
                         "Step ${index + 1}/${steps.size}: expected view not found " +
-                            "(resourceId=${step.resourceId}, searched text=${step.preTapText ?: step.preTapContentDescription}) - flow changed."
+                            "(resourceId=${step.resourceId}, searched text=$searchedText) - flow changed."
                     )
                     statusPill.showBreak(index + 1)
                     broke = true
                     break
                 }
+                if (result.matchedByPostTapText != null) {
+                    RecorderBridge.appendLog(
+                        "Step ${index + 1}/${steps.size}: matched by post-tap text " +
+                            "'${result.matchedByPostTapText}' (no pre-tap label recorded)"
+                    )
+                }
+                val target = result.node
                 target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 target.recycle()
                 RecorderBridge.appendLog("Step ${index + 1}/${steps.size}: tapped ${step.primaryLabel()}")
@@ -413,20 +421,37 @@ class RecordingAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun findNode(root: AccessibilityNodeInfo, step: RecordedStep): AccessibilityNodeInfo? {
+    /** matchedByPostTapText is non-null only when the match came from the third tier
+     *  below (step.text/contentDescription) - the caller logs that case explicitly,
+     *  since it means no pre-tap label was available to prefer instead. */
+    private data class MatchResult(val node: AccessibilityNodeInfo, val matchedByPostTapText: String? = null)
+
+    private fun findNode(root: AccessibilityNodeInfo, step: RecordedStep): MatchResult? {
         step.resourceId?.let { id ->
             val match = root.findAccessibilityNodeInfosByViewId(id).firstOrNull()
-            if (match != null) return match
+            if (match != null) return MatchResult(match)
         }
         // Pre-tap label, not step.text - step.text is the post-tap value, which for a
         // self-toggling element doesn't exist on screen yet at this point in replay
         // (the tap that would produce it hasn't happened), so searching for it would
         // find nothing and falsely report a break. See CLAUDE.md status.
-        val fallbackText = step.preTapText ?: step.preTapContentDescription
-        fallbackText?.let { text ->
+        val preTapText = step.preTapText ?: step.preTapContentDescription
+        preTapText?.let { text ->
             val match = root.findAccessibilityNodeInfosByText(text)
                 .firstOrNull { it.className == step.className }
-            if (match != null) return match
+            if (match != null) return MatchResult(match)
+        }
+        // Last resort, only reached with no resourceId match and no pre-tap label to
+        // try: falls back to the post-tap value so a resourceId-less element isn't left
+        // with nothing to match on at all (it would otherwise always break - the label
+        // cache only ever has entries for elements with a resourceId, so one without
+        // can never get a pre-tap value here). primaryLabel()/the step list/pill never
+        // show this value as the step's name - only findNode uses it, as a last resort.
+        val postTapText = step.text ?: step.contentDescription
+        postTapText?.let { text ->
+            val match = root.findAccessibilityNodeInfosByText(text)
+                .firstOrNull { it.className == step.className }
+            if (match != null) return MatchResult(match, matchedByPostTapText = text)
         }
         return null
     }

@@ -197,6 +197,9 @@ splash would reinforce the Sashy Studios identity — not a must-have, cut first
 time is short.
 
 ## Future ideas — explicitly OUT of v1, do not build now
+- **Extend the label cache to elements without a resourceId** (key on className plus
+  position) so they get real pre-tap tracking, instead of falling back to post-tap
+  text as a last resort for matching only (see the Oct 5 pre-tap label fix follow-up).
 - **Editable recordings** — instead of re-recording a whole flow from scratch when
   a small feature gets added, let the user append new steps to the end of an
   existing recording, or insert steps mid-flow. Mid-flow insertion is the harder
@@ -303,3 +306,12 @@ TEMPORARY `Log.d` (tag `RecordingA11yService`) added for each captured step whil
 Needs an on-device pass against SeekShot's AllShot button specifically: confirm the step list shows "AllShot" (not "✕ Cancel") as the primary label, the secondary detail appears correctly, and replay matches/clicks it without a false break.
 
 Capture logic is necessarily touched (that's where the bug lives). The watchdog's timing/force-stop logic, volume-down's handling, touch exploration (`setTouchExplorationRequested`, still only ever called with `false`), and all MWA/SKR/transaction code are untouched.
+
+### Pre-tap label fix, follow-up: resourceId-less steps regressed (Oct 5, applied)
+On-device test against SeekShot found the fix above introduced a real regression: a 7-step recording replayed only 3 steps before a false break. Diagnosed read-only (logcat has no record of replay results - `RecorderBridge.appendLog()` only updated an in-memory `StateFlow`, nothing reached logcat before this fix; the actual data came from a passive screenshot of the tester's own still-open Replay Log). Step 4 broke with `resourceId=null, searched text=null` - `findNode()` had nothing to match on at all, because the label cache is keyed exclusively by resourceId (`observeLabel()` is only ever called when one exists), so a resourceId-less element can never get a `previous`/`current` entry and `preTapText`/`preTapContentDescription` are `null` by construction for every such step. Before the pre-tap fix, `findNode()`'s fallback used `step.text` (post-tap) directly, which was at least non-null for any element with *some* text - the fix replaced that with a value guaranteed absent for this whole category of element, silently disabling their fallback entirely.
+
+Fix: `findNode()` gained a third tier - resourceId, then pre-tap text, then (new) post-tap text/contentDescription as a last resort, only reached when neither of the first two found a match. The break-detection log's "searched text=" now reflects the same three-tier expression, so it never again claims "searched text=null" when a match was actually attempted. When a step matches via the new third tier, replay logs "Step N/M: matched by post-tap text '<text>' (no pre-tap label recorded)" so a false match is visible in the log, not just silently accepted. None of this changes what's shown to a person as the step's name - `primaryLabel()` (step list, pill, the "tapped" log line) is unchanged: pre-tap label, else resourceId, else "(unlabeled)", never post-tap.
+
+`RecorderBridge.appendLog()` now also writes every line to `Log.d` (tag `TesterReplayLog`), so replay results survive in logcat even if the tester's own UI state is gone - this gap (no logcat record at all) is what made the original investigation need a screenshot instead of a log pull.
+
+Needs an on-device re-run of the same SeekShot flow to confirm step 4 (or whichever step has no resourceId) now matches via the post-tap fallback and logs the new "matched by post-tap text" line, and that replay reaches further than 3/7.

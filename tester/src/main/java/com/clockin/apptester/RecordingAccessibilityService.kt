@@ -3,6 +3,7 @@ package com.clockin.apptester
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
+import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -44,6 +45,18 @@ class RecordingAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        // TEMPORARY diagnostic logging for the Oct 4 investigation into why ordinary
+        // taps don't produce TYPE_VIEW_CLICKED with touch exploration off. Remove once
+        // that's resolved. Fetches its own source and recycles it immediately rather
+        // than reusing the fetch below, so it doesn't change what that existing code does.
+        val diagnosticSource = event.source
+        Log.d(
+            "RecordingA11yService",
+            "event type=${AccessibilityEvent.eventTypeToString(event.eventType)} " +
+                "package=${event.packageName} sourceNull=${diagnosticSource == null}"
+        )
+        diagnosticSource?.recycle()
+
         if (event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) return
         // Skip the tester tool's own UI (e.g. taps on "Stop Recording"/"Replay") - the
         // service has no packageNames filter so it can later see into the wallet app,
@@ -102,6 +115,9 @@ class RecordingAccessibilityService : AccessibilityService() {
      * reaches zero) requests touch exploration and flips the mode over.
      */
     fun beginRecordingCountdown() {
+        // Clears any stale pill state (e.g. a still-fading "REPLAY OK" from a previous
+        // run) immediately, rather than leaving it visible until the first countdown tick.
+        statusPill.hide()
         countdownJob?.cancel()
         countdownJob = scope.launch {
             for (remaining in RECORDING_COUNTDOWN_SECONDS downTo 1) {
@@ -141,6 +157,9 @@ class RecordingAccessibilityService : AccessibilityService() {
      * shows afterwards.
      */
     internal fun startRecordingStatusTicker() {
+        // Clears any stale pill state immediately - the countdown's own pill already
+        // covers the gap up to this point, so this is mostly belt-and-suspenders.
+        statusPill.hide()
         recordingStatusTicker?.cancel()
         val startedAtMs = System.currentTimeMillis()
         var lastStepCount = -1
@@ -220,27 +239,37 @@ class RecordingAccessibilityService : AccessibilityService() {
     /** Re-finds each step's view in the current window and taps it, in order. */
     fun replay(steps: List<RecordedStep>) {
         scope.launch {
+            // Starting a new replay clears any stale pill state immediately (e.g. a
+            // "FLOW CHANGED" from a previous run still mid-fade) rather than leaving it
+            // up through the app-launch delay below, where nothing else would overwrite it.
+            statusPill.hide()
+
             // The tester's own UI is still in the foreground when this starts (the user
             // just tapped "Replay" here) - bring the recorded app back first, or every
             // step would be searched for in the wrong window and immediately "break".
             val targetPackage = steps.firstOrNull()?.packageName
             if (targetPackage != null && targetPackage != packageName) {
                 val launchIntent = packageManager.getLaunchIntentForPackage(targetPackage)
-                if (launchIntent != null) {
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(launchIntent)
-                    RecorderBridge.appendLog("Bringing $targetPackage to foreground...")
-                    delay(TARGET_APP_LAUNCH_DELAY_MS)
-                } else {
-                    RecorderBridge.appendLog("Replay warning: couldn't launch $targetPackage - not installed?")
+                if (launchIntent == null) {
+                    // getLaunchIntentForPackage also returns null when the target is installed
+                    // but not visible to us (missing <queries> entry) - not just "not installed".
+                    RecorderBridge.appendLog("Replay failed: can't launch $targetPackage: not visible or not installed")
+                    RecorderBridge.replayFinished()
+                    return@launch
                 }
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(launchIntent)
+                RecorderBridge.appendLog("Bringing $targetPackage to foreground...")
+                delay(TARGET_APP_LAUNCH_DELAY_MS)
             }
+            var broke = false
             for ((index, step) in steps.withIndex()) {
                 statusPill.showReplay(index + 1, steps.size)
                 val root = rootInActiveWindow
                 if (root == null) {
                     RecorderBridge.appendLog("Step ${index + 1}/${steps.size}: no active window - stopping.")
                     statusPill.showBreak(index + 1)
+                    broke = true
                     break
                 }
                 val target = findNode(root, step)
@@ -251,6 +280,7 @@ class RecordingAccessibilityService : AccessibilityService() {
                             "(resourceId=${step.resourceId}, text=${step.text}) - flow changed."
                     )
                     statusPill.showBreak(index + 1)
+                    broke = true
                     break
                 }
                 target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
@@ -260,6 +290,9 @@ class RecordingAccessibilityService : AccessibilityService() {
                         (step.resourceId ?: step.text ?: step.contentDescription ?: "unknown view")
                 )
                 delay(REPLAY_STEP_DELAY_MS)
+            }
+            if (!broke) {
+                statusPill.showFinished()
             }
             RecorderBridge.appendLog("Replay finished.")
             RecorderBridge.replayFinished()

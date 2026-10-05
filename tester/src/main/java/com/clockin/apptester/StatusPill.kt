@@ -46,6 +46,11 @@ class StatusPill(private val service: AccessibilityService) {
         }
     }
 
+    // Tracks a scheduled auto-hide (showStopped/showBreak/showFinished) so a later
+    // render() can cancel it specifically - removeCallbacksAndMessages(null) would also
+    // cancel the pulse dot's own repeating schedule, stopping it from pulsing further.
+    private var pendingHide: Runnable? = null
+
     fun showCountdown(secondsRemaining: Int) {
         render(line1Text = "STARTING IN $secondsRemaining", line2Text = null, isError = false)
     }
@@ -68,21 +73,38 @@ class StatusPill(private val service: AccessibilityService) {
 
     fun showStopped(stepCount: Int) {
         render(line1Text = "STOPPED - $stepCount steps", line2Text = null, isError = false)
-        mainHandler.postDelayed({ hide() }, STOPPED_FADE_DELAY_MS)
+        scheduleHide(STOPPED_FADE_DELAY_MS)
     }
 
     fun showReplay(stepNumber: Int, totalSteps: Int) {
         render(line1Text = "REPLAY - step $stepNumber/$totalSteps", line2Text = null, isError = false)
     }
 
+    /** A replay break used to leave the pill showing "FLOW CHANGED" forever - it now
+     *  fades out on its own, same as every other terminal pill state. */
     fun showBreak(stepNumber: Int) {
         render(line1Text = "FLOW CHANGED - step $stepNumber", line2Text = null, isError = true)
+        scheduleHide(BREAK_FADE_DELAY_MS)
+    }
+
+    /** A replay that completes every step without a break. */
+    fun showFinished() {
+        render(line1Text = "REPLAY OK", line2Text = null, isError = false)
+        scheduleHide(FINISHED_FADE_DELAY_MS)
+    }
+
+    private fun scheduleHide(delayMs: Long) {
+        pendingHide?.let { mainHandler.removeCallbacks(it) }
+        val runnable = Runnable { hide() }
+        pendingHide = runnable
+        mainHandler.postDelayed(runnable, delayMs)
     }
 
     /** Removes the overlay entirely. Called on service disconnect, countdown/recording
-     *  cancellation, and when the 60s watchdog fires - see the call sites in
-     *  RecordingAccessibilityService and RecorderBridge. */
+     *  cancellation, when the watchdog fires, and by scheduleHide's own fade-out timers
+     *  - see the call sites in RecordingAccessibilityService and RecorderBridge. */
     fun hide() {
+        pendingHide = null
         mainHandler.removeCallbacksAndMessages(null)
         // Safety: the pill must end up fully visible or fully removed, never stuck
         // invisible - force both back to normal before tearing the window down.
@@ -96,6 +118,13 @@ class StatusPill(private val service: AccessibilityService) {
     }
 
     private fun render(line1Text: String, line2Text: String?, isError: Boolean) {
+        // Starting a new state (countdown/recording/replay/stopped/finished/break)
+        // clears any fade-out timer left over from whatever the pill showed before -
+        // otherwise a stale showBreak()/showFinished() timer could later hide() this
+        // new, unrelated content out from under it. Doesn't touch the pulse dot's own
+        // repeating schedule - see pendingHide's declaration.
+        pendingHide?.let { mainHandler.removeCallbacks(it) }
+        pendingHide = null
         ensureAdded()
         // Same invariant as hide(): whenever we're showing content, it must actually
         // be visible, regardless of anything that may have faded it out before.
@@ -253,5 +282,7 @@ class StatusPill(private val service: AccessibilityService) {
         private const val GLOW_ALPHA = 51 // ~20% of 255
         private const val DOT_PULSE_INTERVAL_MS = 1500L
         private const val STOPPED_FADE_DELAY_MS = 3000L
+        private const val BREAK_FADE_DELAY_MS = 8000L
+        private const val FINISHED_FADE_DELAY_MS = 3000L
     }
 }

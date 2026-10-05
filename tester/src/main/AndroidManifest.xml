@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+        Android 11+ package visibility: without this, PackageManager.getLaunchIntentForPackage
+        returns null for another app even when it's installed, which replay() can't tell apart
+        from "not installed" - see the Oct 4 investigation. Wallet packages (Phantom, Solflare,
+        etc.) are deliberately not listed yet - add them when replay needs to launch a wallet.
+    -->
+    <queries>
+        <package android:name="com.clockin.mwatestapp" />
+        <package android:name="com.sashystudios.seekshot" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

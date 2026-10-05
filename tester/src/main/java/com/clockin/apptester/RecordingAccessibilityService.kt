@@ -16,6 +16,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class RecordingAccessibilityService : AccessibilityService() {
 
@@ -372,45 +373,50 @@ class RecordingAccessibilityService : AccessibilityService() {
                     RecorderBridge.replayFinished()
                     return@launch
                 }
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                // CLEAR_TASK forces the target back to its launch screen instead of
+                // resuming wherever a previous replay attempt left it mid-flow - without
+                // it, run-to-run results can vary just from inherited app state. It only
+                // resets the activity stack: the process may be reused rather than
+                // killed, and saved data (SharedPreferences, databases, files) and
+                // granted permissions are untouched - the log line says so explicitly.
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                 startActivity(launchIntent)
-                RecorderBridge.appendLog("Bringing $targetPackage to foreground...")
+                RecorderBridge.appendLog(
+                    "Launching $targetPackage with a clean task " +
+                        "(activity stack reset; saved data and permissions are not reset)"
+                )
                 delay(TARGET_APP_LAUNCH_DELAY_MS)
             }
             var completedSteps = 0
             var broke = false
             for ((index, step) in steps.withIndex()) {
                 statusPill.showReplay(index + 1, steps.size, step.primaryLabel())
-                val root = rootInActiveWindow
-                if (root == null) {
-                    RecorderBridge.appendLog("Step ${index + 1}/${steps.size}: no active window - stopping.")
-                    statusPill.showBreak(index + 1)
-                    broke = true
-                    break
+                when (val lookup = findNodeWithRetry(step)) {
+                    is ReplayLookup.NotFound -> {
+                        RecorderBridge.appendLog(breakExplanation(index, steps.size, step, lookup.onScreen))
+                        statusPill.showBreak(index + 1)
+                        broke = true
+                    }
+                    is ReplayLookup.Found -> {
+                        val result = lookup.result
+                        if (result.matchedByPostTapText != null) {
+                            RecorderBridge.appendLog(
+                                "Step ${index + 1}/${steps.size}: matched by post-tap text " +
+                                    "'${result.matchedByPostTapText}' (no pre-tap label recorded)"
+                            )
+                        }
+                        val target = result.node
+                        target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        target.recycle()
+                        RecorderBridge.appendLog("Step ${index + 1}/${steps.size}: tapped ${step.primaryLabel()}")
+                        completedSteps++
+                    }
                 }
-                val result = findNode(root, step)
-                root.recycle()
-                if (result == null) {
-                    val searchedText = step.preTapText ?: step.preTapContentDescription ?: step.text ?: step.contentDescription
-                    RecorderBridge.appendLog(
-                        "Step ${index + 1}/${steps.size}: expected view not found " +
-                            "(resourceId=${step.resourceId}, searched text=$searchedText) - flow changed."
-                    )
-                    statusPill.showBreak(index + 1)
-                    broke = true
-                    break
-                }
-                if (result.matchedByPostTapText != null) {
-                    RecorderBridge.appendLog(
-                        "Step ${index + 1}/${steps.size}: matched by post-tap text " +
-                            "'${result.matchedByPostTapText}' (no pre-tap label recorded)"
-                    )
-                }
-                val target = result.node
-                target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                target.recycle()
-                RecorderBridge.appendLog("Step ${index + 1}/${steps.size}: tapped ${step.primaryLabel()}")
-                completedSteps++
+                if (broke) break
+                // Kept exactly as it was: 1000ms between a successful step and the next
+                // step's first lookup attempt - the retry loop above adds up to 3 more
+                // seconds only when a step isn't found right away, it doesn't change the
+                // pacing of steps that succeed immediately.
                 delay(REPLAY_STEP_DELAY_MS)
             }
             if (!broke) {
@@ -425,6 +431,101 @@ class RecordingAccessibilityService : AccessibilityService() {
      *  below (step.text/contentDescription) - the caller logs that case explicitly,
      *  since it means no pre-tap label was available to prefer instead. */
     private data class MatchResult(val node: AccessibilityNodeInfo, val matchedByPostTapText: String? = null)
+
+    private sealed class ReplayLookup {
+        data class Found(val result: MatchResult) : ReplayLookup()
+        data class NotFound(val onScreen: List<ClickableElement>) : ReplayLookup()
+    }
+
+    /** Plain data only, by design - never an AccessibilityNodeInfo reference, so nothing
+     *  returned from listClickableElements/collectClickableElements can ever be used
+     *  after the root it came from is recycled. */
+    private data class ClickableElement(val resourceId: String?, val label: String, val className: String?)
+
+    /**
+     * Polls for a match every NODE_SEARCH_POLL_INTERVAL_MS, up to NODE_SEARCH_TIMEOUT_MS
+     * total, instead of the single immediate lookup this used to be - a screen that
+     * takes a moment longer than REPLAY_STEP_DELAY_MS to finish rendering after the
+     * previous step no longer reads as a false break. Covers both "no active window
+     * yet" and "window present but node not found" the same way: either just means
+     * try again next tick. On every failed attempt (root present, no match), captures
+     * what's actually on screen - walked and converted to plain ClickableElement data
+     * before that root is recycled, so lastOnScreen never holds a node reference across
+     * the recycle. Only the most recent snapshot is kept; if the timeout expires, that's
+     * what the break explanation reports.
+     */
+    private suspend fun findNodeWithRetry(step: RecordedStep): ReplayLookup {
+        var lastOnScreen: List<ClickableElement> = emptyList()
+        val found = withTimeoutOrNull(NODE_SEARCH_TIMEOUT_MS) {
+            var result: MatchResult? = null
+            while (result == null) {
+                val root = rootInActiveWindow
+                if (root != null) {
+                    result = findNode(root, step)
+                    if (result == null) {
+                        lastOnScreen = listClickableElements(root, MAX_ON_SCREEN_ELEMENTS)
+                    }
+                    root.recycle()
+                }
+                if (result == null) delay(NODE_SEARCH_POLL_INTERVAL_MS)
+            }
+            result
+        }
+        return if (found != null) ReplayLookup.Found(found) else ReplayLookup.NotFound(lastOnScreen)
+    }
+
+    /** "expected <name>, not found", up to 5 clickable elements currently on screen, and
+     *  the closest match (same class) flagged as possibly renamed - the minimal break
+     *  explanation from CLAUDE.md's "Break explanations" section. Observable differences
+     *  only: this never claims to know what changed in the target app's code. */
+    private fun breakExplanation(
+        index: Int,
+        totalSteps: Int,
+        step: RecordedStep,
+        onScreen: List<ClickableElement>
+    ): String {
+        val closest = onScreen.firstOrNull { it.className == step.className }
+        return buildString {
+            append("Step ${index + 1}/$totalSteps: expected ${step.primaryLabel()}, not found.")
+            if (onScreen.isNotEmpty()) {
+                append(" On screen: ")
+                append(onScreen.joinToString("; ") { "${it.resourceId ?: "(no id)"} '${it.label}'" })
+            }
+            if (closest != null) {
+                append(" Possibly renamed: ${closest.resourceId ?: "(no id)"} '${closest.label}'.")
+            }
+        }
+    }
+
+    private fun listClickableElements(root: AccessibilityNodeInfo, limit: Int): List<ClickableElement> {
+        val found = mutableListOf<ClickableElement>()
+        collectClickableElements(root, limit, found)
+        return found
+    }
+
+    /** Never recycles root itself - same ownership convention as snapshotLabels, the
+     *  caller recycles it. Recycles every child it fetches via getChild(). Stops
+     *  early once limit is reached so a large/deep tree doesn't get fully walked
+     *  just to report 5 elements. */
+    private fun collectClickableElements(node: AccessibilityNodeInfo, limit: Int, into: MutableList<ClickableElement>) {
+        if (into.size >= limit) return
+        if (node.isClickable) {
+            val label = node.text?.toString()
+                ?: node.contentDescription?.toString()
+                ?: node.viewIdResourceName
+                ?: "(unlabeled)"
+            into.add(ClickableElement(node.viewIdResourceName, label, node.className?.toString()))
+        }
+        for (i in 0 until node.childCount) {
+            if (into.size >= limit) return
+            val child = node.getChild(i) ?: continue
+            try {
+                collectClickableElements(child, limit, into)
+            } finally {
+                child.recycle()
+            }
+        }
+    }
 
     private fun findNode(root: AccessibilityNodeInfo, step: RecordedStep): MatchResult? {
         step.resourceId?.let { id ->
@@ -460,6 +561,13 @@ class RecordingAccessibilityService : AccessibilityService() {
         // Delay between replay steps.
         private const val REPLAY_STEP_DELAY_MS = 1000L
         private const val TARGET_APP_LAUNCH_DELAY_MS = 1500L
+
+        // How long and how often findNodeWithRetry polls before declaring a break.
+        private const val NODE_SEARCH_TIMEOUT_MS = 3000L
+        private const val NODE_SEARCH_POLL_INTERVAL_MS = 300L
+
+        // Cap on how many on-screen clickable elements a break explanation lists.
+        private const val MAX_ON_SCREEN_ELEMENTS = 5
 
         // Gives the current tap's touch-up event time to finish resolving under the old
         // input mode before the touch-exploration flag switches - see setTouchExplorationRequested.

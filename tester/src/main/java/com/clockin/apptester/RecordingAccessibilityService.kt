@@ -8,6 +8,7 @@ import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.clockin.apptester.model.RecordedStep
+import com.clockin.apptester.model.displayLabel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -265,9 +266,10 @@ class RecordingAccessibilityService : AccessibilityService() {
                 RecorderBridge.appendLog("Bringing $targetPackage to foreground...")
                 delay(TARGET_APP_LAUNCH_DELAY_MS)
             }
+            var completedSteps = 0
             var broke = false
             for ((index, step) in steps.withIndex()) {
-                statusPill.showReplay(index + 1, steps.size)
+                statusPill.showReplay(index + 1, steps.size, step.displayLabel())
                 val root = rootInActiveWindow
                 if (root == null) {
                     RecorderBridge.appendLog("Step ${index + 1}/${steps.size}: no active window - stopping.")
@@ -288,16 +290,14 @@ class RecordingAccessibilityService : AccessibilityService() {
                 }
                 target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 target.recycle()
-                RecorderBridge.appendLog(
-                    "Step ${index + 1}/${steps.size}: tapped " +
-                        (step.resourceId ?: step.text ?: step.contentDescription ?: "unknown view")
-                )
+                RecorderBridge.appendLog("Step ${index + 1}/${steps.size}: tapped ${step.displayLabel()}")
+                completedSteps++
                 delay(REPLAY_STEP_DELAY_MS)
             }
             if (!broke) {
                 statusPill.showFinished()
             }
-            RecorderBridge.appendLog("Replay finished.")
+            RecorderBridge.appendLog("Replay finished: $completedSteps of ${steps.size} steps ran.")
             RecorderBridge.replayFinished()
         }
     }
@@ -316,7 +316,8 @@ class RecordingAccessibilityService : AccessibilityService() {
     }
 
     companion object {
-        private const val REPLAY_STEP_DELAY_MS = 800L
+        // Delay between replay steps.
+        private const val REPLAY_STEP_DELAY_MS = 1000L
         private const val TARGET_APP_LAUNCH_DELAY_MS = 1500L
 
         // Gives the current tap's touch-up event time to finish resolving under the old
@@ -339,5 +340,3 @@ class RecordingAccessibilityService : AccessibilityService() {
         private const val STEP_DETAIL_VISIBLE_MS = 2000L
     }
 }
-
-private fun RecordedStep.displayLabel(): String? = text ?: contentDescription ?: resourceId

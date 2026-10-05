@@ -12,3 +12,7 @@ data class RecordedStep(
     val text: String?,
     val contentDescription: String?
 )
+
+/** Human-readable label, in the one precedence order used everywhere a step needs to
+ *  be shown to a person - the status pill, the replay log, and the tester's step list. */
+fun RecordedStep.displayLabel(): String = text ?: contentDescription ?: resourceId ?: "(unlabeled)"

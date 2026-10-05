@@ -12,9 +12,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -30,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.clockin.apptester.model.displayLabel
 import com.clockin.apptester.ui.theme.SashyColors
 import com.clockin.apptester.ui.theme.SashyTheme
 
@@ -139,6 +142,26 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
         }
 
         Text("Recorded steps: ${steps.size}", color = SashyColors.DimWhite)
+
+        if (steps.isNotEmpty()) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(140.dp)
+                    .background(SashyColors.CardBlack, RoundedCornerShape(12.dp))
+                    .border(1.dp, SashyColors.BorderGray, RoundedCornerShape(12.dp))
+                    .padding(12.dp)
+            ) {
+                itemsIndexed(steps) { index, step ->
+                    Text(
+                        "${index + 1}. ${step.displayLabel()} | ${step.packageName}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = SashyColors.ElectricGreen
+                    )
+                }
+            }
+        }
 
         Button(
             onClick = { RecorderBridge.startReplay() },

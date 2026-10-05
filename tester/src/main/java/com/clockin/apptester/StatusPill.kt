@@ -76,8 +76,8 @@ class StatusPill(private val service: AccessibilityService) {
         scheduleHide(STOPPED_FADE_DELAY_MS)
     }
 
-    fun showReplay(stepNumber: Int, totalSteps: Int) {
-        render(line1Text = "REPLAY - step $stepNumber/$totalSteps", line2Text = null, isError = false)
+    fun showReplay(stepNumber: Int, totalSteps: Int, stepLabel: String) {
+        render(line1Text = "REPLAY - step $stepNumber/$totalSteps", line2Text = stepLabel, isError = false)
     }
 
     /** A replay break used to leave the pill showing "FLOW CHANGED" forever - it now

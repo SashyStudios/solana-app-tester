@@ -26,7 +26,10 @@ import java.util.Locale
  */
 class StatusPill(private val service: AccessibilityService) {
 
-    private val windowManager = service.getSystemService(WindowManager::class.java)
+    // Deferred to first use (see ensureAdded/hide, always from onServiceConnected onward) -
+    // this used to run eagerly here, but field initializers execute during the service's
+    // own constructor, before Android attaches a Context, which crashed getSystemService.
+    private val windowManager: WindowManager? by lazy { service.getSystemService(WindowManager::class.java) }
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var rootView: View? = null

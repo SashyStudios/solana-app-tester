@@ -220,6 +220,36 @@ Where this section conflicts with earlier text in this file, this section wins.
 - The capture method is under review. Candidates: (0) find out why ordinary taps do not emit TYPE_VIEW_CLICKED on API 36, since this may be a config problem; (A) TouchInteractionController; (B) transparent accessibility overlay with dispatchGesture re-dispatch; (C) guided step capture from the accessibility tree; (D) scripted step list for the demo app, with live recording shown as roadmap.
 - Cutoff: if one-finger record and replay of a single tap is not reliable by end of Oct 5, switch to option D. Say so explicitly, do not drift.
 
+### Capture method: resolved (Oct 5) - the Compose limitation, and the decision
+Option 0 from the candidates above is answered. Verified two ways: (1) a TEMPORARY
+"experiment" recording mode (touch exploration never requested) showed real apps built
+with classic Android Views - `com.sashystudios.camcheck` - emit `TYPE_VIEW_CLICKED` for
+ordinary one-finger taps with touch exploration off, while the demo app (then Compose)
+emitted zero despite clearly handling the taps (window content kept changing). (2) Pulled
+both APKs read-only and inspected their dex: CamCheck has 0 `androidx/compose/runtime`
+references and 99 app-authored `res/layout/*.xml` files (classic Views, confirmed); the
+demo app had 23 Composer references and 5 ComposeView references with zero app-authored
+layouts (Compose, confirmed). Root cause: classic `View.performClick()` calls
+`sendAccessibilityEvent(TYPE_VIEW_CLICKED)` directly; Compose's accessibility delegate
+only emits that event when `ACTION_CLICK` arrives through the accessibility API, which is
+what touch exploration provided and an ordinary untouched-exploration tap does not.
+
+Decision: the demo app (module `app`) is rebuilt with classic Android Views instead of
+Compose - `setContentView` + `activity_main.xml`, stable IDs `btnConnectWallet`,
+`btnSendTest`, `btnSendLarge`, `statusText` - specifically so it emits `TYPE_VIEW_CLICKED`
+on its own. The tester's recording path now never requests touch exploration at all - the
+"Record (normal touch, experiment)" button's behavior became the only/main Record button;
+the old two-finger flow and its touch-exploration request are removed. `MainViewModel`,
+`TokenProgram`, `SolanaConfig`, and all MWA/SKR/transaction code are unchanged - only the
+UI layer (Compose -> classic Views) and how its state gets collected (`collectAsState` ->
+`lifecycleScope`/`repeatOnLifecycle`) changed in the demo app.
+
+Guided capture (option C: no touch interception, a hardware key or floating button lists
+clickable elements from the accessibility tree to pick from) is NOT being built now - it
+goes on the roadmap for apps we don't control, which may still be Compose-based in the
+real world (the demo app is ours, so switching its UI framework was the direct fix here;
+a real third-party target app can't be rebuilt the same way).
+
 ### Status pill (built, on-device verification pending)
 A display-only floating pill, TYPE_ACCESSIBILITY_OVERLAY, plain Android views. Top-center under the status bar. Black at 55% opacity, fully rounded, green #00FF88 monospace text, small green S at the left, soft green glow at about 20% opacity, pulsing dot every 1.5 seconds. FLAG_NOT_TOUCHABLE and FLAG_NOT_FOCUSABLE so touches always pass through, plus IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS on the whole view tree so touch exploration's hit-test skips the pill entirely instead of landing on it. One line while recording ("REC - 3 steps"); the detail line (last step/auto-stop/VOL-DOWN STOP) only shows for ~2s after each newly captured step. States: countdown "STARTING IN 5"; recording "REC - 3 steps" plus line 2 "last: <label or (unlabeled)> | auto-stop 0:42 | VOL-DOWN STOP"; stopped "STOPPED - 3 steps" fading after 3s; replay "REPLAY - step 2/5"; break in red #FF4444 "FLOW CHANGED - step 3". Remove the overlay when the service disconnects, recording is cancelled, or the watchdog fires. Safety rule: the pill must always end up fully visible or fully removed, never stuck invisible.
 
@@ -233,7 +263,7 @@ Changed from the flat 60s timer described below (that version is what the "Verif
 
 ### Test rules
 - I run any risky on-device test by hand. You may build with gradlew and install with adb, but never start the accessibility service via adb settings put (I enable it in Settings so the confirmation dialog appears), and never tap anything on the phone unless I ask.
-- Replay test target: the demo app's Connect Wallet button (Compose, exposes text). Settings rows record with no text or ID, so replay cannot find them. Close the wallet picker without selecting a wallet.
+- Replay test target: the demo app's Connect Wallet button (classic View now, resource ID `btnConnectWallet` - see the Oct 5 capture-method decision above). Settings rows record with no text or ID, so replay cannot find them. Close the wallet picker without selecting a wallet.
 - Never connect my real wallet. The devnet test wallet and the SKR mint are not finished. The setup script is waiting on devnet SOL for the mint authority.
 - If the screen locks up: hold Power for about 10 seconds.
 

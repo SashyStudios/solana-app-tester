@@ -31,28 +31,6 @@ object RecorderBridge {
     private val _countdownSecondsRemaining = MutableStateFlow<Int?>(null)
     val countdownSecondsRemaining: StateFlow<Int?> = _countdownSecondsRemaining.asStateFlow()
 
-    // TEMPORARY experiment mode (see startExperimentRecordingCountdown): whether the
-    // current RecorderMode.RECORDING session never requested touch exploration, plus
-    // live counters for the pill's line 2 while it runs. Plain vars, not StateFlow -
-    // only ever read/written from the main thread (Compose click handlers and
-    // AccessibilityService callbacks), same as every other mutable field here.
-    internal var isExperimentRecording = false
-        private set
-    private var experimentClickCount = 0
-    private var experimentDroppedCount = 0
-
-    internal fun recordExperimentClick() {
-        experimentClickCount++
-    }
-
-    internal fun recordExperimentDropped() {
-        experimentDroppedCount++
-    }
-
-    internal fun experimentClickCount(): Int = experimentClickCount
-
-    internal fun experimentDroppedCount(): Int = experimentDroppedCount
-
     internal fun attachService(instance: RecordingAccessibilityService) {
         service = instance
         _isServiceConnected.value = true
@@ -85,9 +63,12 @@ object RecorderBridge {
     }
 
     /**
-     * Starts the pre-recording countdown. Touch exploration stays off and nothing is
-     * recorded while it counts down - the service only requests touch exploration and
-     * flips into RecorderMode.RECORDING once it reaches zero (see beginRecording).
+     * Starts the pre-recording countdown. Nothing is recorded while it counts down -
+     * the service flips into RecorderMode.RECORDING once it reaches zero (see
+     * beginRecording). Touch exploration is never requested anywhere in this path - the
+     * Oct 4/5 investigation found Compose doesn't reliably emit TYPE_VIEW_CLICKED for
+     * ordinary taps, which touch exploration existed to work around, but classic Android
+     * Views (what the demo app is built with now) do emit it on their own.
      */
     fun startRecordingCountdown() {
         if (_mode.value != RecorderMode.IDLE) return
@@ -101,44 +82,10 @@ object RecorderBridge {
         svc.beginRecordingCountdown()
     }
 
-    /** Called by the service once the countdown reaches zero - the only point where
-     *  touch exploration actually gets requested. */
+    /** Called by the service once the countdown reaches zero. */
     internal fun beginRecording() {
         _mode.value = RecorderMode.RECORDING
-        service?.setTouchExplorationRequested(true)
         service?.startRecordingStatusTicker()
-    }
-
-    /**
-     * TEMPORARY experiment entry point for the "Record (normal touch, experiment)"
-     * button. Mirrors startRecordingCountdown()/beginRecording() exactly, except the
-     * countdown finishes into beginExperimentRecording() instead, which never requests
-     * touch exploration - capture then depends entirely on whether the target app emits
-     * TYPE_VIEW_CLICKED for ordinary one-finger touches on its own. Reuses
-     * RecorderMode.RECORDING (not a separate mode), so capture, the watchdog, and
-     * volume-down all keep working unmodified - none of them care how touch exploration
-     * got into its current state, only what RecorderMode.mode currently is.
-     */
-    fun startExperimentRecordingCountdown() {
-        if (_mode.value != RecorderMode.IDLE) return
-        val svc = service
-        if (svc == null) {
-            appendLog("Cannot start recording: accessibility service not connected.")
-            return
-        }
-        _recordedSteps.value = emptyList()
-        experimentClickCount = 0
-        experimentDroppedCount = 0
-        _mode.value = RecorderMode.COUNTDOWN
-        svc.beginRecordingCountdown { beginExperimentRecording() }
-    }
-
-    /** TEMPORARY - see startExperimentRecordingCountdown. Deliberately skips
-     *  setTouchExplorationRequested(true), the only difference from beginRecording(). */
-    internal fun beginExperimentRecording() {
-        _mode.value = RecorderMode.RECORDING
-        isExperimentRecording = true
-        service?.startRecordingStatusTicker(experimentMode = true)
     }
 
     /** Cancels an in-progress countdown (button re-tap or volume-down). Touch exploration
@@ -152,7 +99,9 @@ object RecorderBridge {
 
     fun stopRecording() {
         _mode.value = RecorderMode.IDLE
-        isExperimentRecording = false
+        // Defensive: touch exploration is never requested on in the recording path
+        // anymore, so this is normally a no-op clearing an already-clear flag - kept
+        // in case a flag got left on by an older build/session.
         service?.setTouchExplorationRequested(false)
     }
 

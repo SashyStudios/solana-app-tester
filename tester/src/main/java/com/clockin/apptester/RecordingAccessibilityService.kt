@@ -64,24 +64,11 @@ class RecordingAccessibilityService : AccessibilityService() {
         diagnosticSource?.recycle()
 
         if (event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) return
-
-        // TEMPORARY experiment counters (see RecorderBridge.startExperimentRecordingCountdown)
-        // - only increment while that specific session is running, reset at its start.
-        if (RecorderBridge.isExperimentRecording) {
-            RecorderBridge.recordExperimentClick()
-        }
-
         // Skip the tester tool's own UI (e.g. taps on "Stop Recording"/"Replay") - the
         // service has no packageNames filter so it can later see into the wallet app,
         // but that means our own controls would otherwise get recorded as steps too.
         if (event.packageName?.toString() == packageName) return
-        val source = event.source
-        if (source == null) {
-            if (RecorderBridge.isExperimentRecording) {
-                RecorderBridge.recordExperimentDropped()
-            }
-            return
-        }
+        val source = event.source ?: return
         val step = RecordedStep(
             packageName = event.packageName?.toString() ?: run { source.recycle(); return },
             className = source.className?.toString(),
@@ -130,15 +117,11 @@ class RecordingAccessibilityService : AccessibilityService() {
      * status pill. Touch exploration is never requested here and nothing gets recorded
      * during this window (recording only happens while RecorderMode.RECORDING - see
      * RecorderBridge.appendStep), so the user can leave this app, open the target app,
-     * and use normal touches while it counts down. Only beginRecording() (called once it
-     * reaches zero) requests touch exploration and flips the mode over.
-     *
-     * onComplete defaults to the normal flow (RecorderBridge.beginRecording()); every
-     * existing call site uses that default unchanged. TEMPORARY experiment mode passes
-     * RecorderBridge.beginExperimentRecording() instead, so the countdown itself - same
-     * 7 ticks, same pill - is shared between both without duplicating this loop.
+     * and use normal touches while it counts down. beginRecording() (called once it
+     * reaches zero) flips the mode over - touch exploration is never requested anywhere
+     * in this path (see RecorderBridge.startRecordingCountdown).
      */
-    fun beginRecordingCountdown(onComplete: () -> Unit = { RecorderBridge.beginRecording() }) {
+    fun beginRecordingCountdown() {
         // Clears any stale pill state (e.g. a still-fading "REPLAY OK" from a previous
         // run) immediately, rather than leaving it visible until the first countdown tick.
         statusPill.hide()
@@ -151,7 +134,7 @@ class RecordingAccessibilityService : AccessibilityService() {
             }
             countdownJob = null
             RecorderBridge.setCountdownSecondsRemaining(null)
-            onComplete()
+            RecorderBridge.beginRecording()
         }
     }
 
@@ -179,13 +162,8 @@ class RecordingAccessibilityService : AccessibilityService() {
      * the button use). Exits on its own once mode leaves RECORDING for any other
      * reason; whichever stop path triggered that is responsible for what the pill
      * shows afterwards.
-     *
-     * experimentMode only changes what gets displayed each tick (live click/recorded/
-     * dropped counters instead of the normal last-step/auto-stop detail line) - the
-     * inactivity timeout, hard cap, and force-stop path above are identical either way,
-     * so the watchdog behaves exactly the same regardless of which flow started it.
      */
-    internal fun startRecordingStatusTicker(experimentMode: Boolean = false) {
+    internal fun startRecordingStatusTicker() {
         // Clears any stale pill state immediately - the countdown's own pill already
         // covers the gap up to this point, so this is mostly belt-and-suspenders.
         statusPill.hide()
@@ -220,17 +198,9 @@ class RecordingAccessibilityService : AccessibilityService() {
                     return@launch
                 }
 
-                if (experimentMode) {
-                    statusPill.showExperimentRecording(
-                        steps.size,
-                        RecorderBridge.experimentClickCount(),
-                        RecorderBridge.experimentDroppedCount()
-                    )
-                } else {
-                    val remainingSeconds = minOf(inactivityRemainingMs, hardCapRemainingMs) / 1000
-                    val showDetail = now - lastCapturedAtMs < STEP_DETAIL_VISIBLE_MS
-                    statusPill.showRecording(steps.size, steps.lastOrNull()?.displayLabel(), remainingSeconds, showDetail)
-                }
+                val remainingSeconds = minOf(inactivityRemainingMs, hardCapRemainingMs) / 1000
+                val showDetail = now - lastCapturedAtMs < STEP_DETAIL_VISIBLE_MS
+                statusPill.showRecording(steps.size, steps.lastOrNull()?.displayLabel(), remainingSeconds, showDetail)
                 delay(1000L)
             }
             recordingStatusTicker = null
@@ -238,26 +208,22 @@ class RecordingAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Touch exploration (the TalkBack mechanism: single tap explores/focuses, a second
-     * tap activates) is the only way an ordinary direct touch produces a TYPE_VIEW_CLICKED
-     * event on this platform - a plain tap with touch exploration off never does, which is
-     * why recording must request it. It's a device-wide mode, so it's requested only for
-     * the recording window and dropped immediately after, leaving normal touch behavior
-     * (and replay, which clicks via performAction and never needed this) unaffected.
+     * No longer called with true anywhere: recording used to request touch exploration
+     * (the TalkBack mechanism - single tap explores/focuses, a second tap activates) to
+     * make an ordinary direct touch produce a TYPE_VIEW_CLICKED event, which classic
+     * Android Views emit on their own but Compose does not. The demo app is classic
+     * Views now (see CLAUDE.md's Oct 5 decision), so recording no longer needs it - see
+     * RecorderBridge.startRecordingCountdown/beginRecording. Kept, called only with
+     * false from RecorderBridge.stopRecording(), as defensive cleanup in case a flag got
+     * left on by an older build/session; the capability declaration
+     * (canRequestTouchExplorationMode) and this method are otherwise unused infrastructure.
      *
-     * The flag flip is deferred rather than applied inline: this is called from the same
-     * Start/Stop Recording tap that's still being dispatched, and switching this system-wide
-     * input mode mid-gesture has been observed to desync the platform's touch-exploration
-     * input filter - it gets stuck intercepting all touchscreen input (hardware buttons still
-     * work) until a hard reboot, since the stuck state lives in the system server, not this
-     * app. Waiting for the current gesture to fully resolve before switching avoids the race.
-     * Any previously scheduled toggle is cancelled first so a quick Start-then-Stop tap can't
-     * land the two flag changes out of order.
-     *
-     * The recording watchdog used to be armed/disarmed here too; it now lives in
-     * startRecordingStatusTicker, which already polls the same step list once a second
-     * for the pill display and needs the identical "time since last step" tracking the
-     * watchdog's inactivity timer needs - see that function.
+     * The flag flip stays deferred (not applied inline) for the same reason it always
+     * was: switching this system-wide input mode has been observed to desync the
+     * platform's touch-exploration input filter if done mid-gesture - it gets stuck
+     * intercepting all touchscreen input (hardware buttons still work) until a hard
+     * reboot, since the stuck state lives in the system server, not this app. Any
+     * previously scheduled toggle is cancelled first so calls can't land out of order.
      */
     fun setTouchExplorationRequested(requested: Boolean) {
         pendingTouchExplorationToggle?.cancel()

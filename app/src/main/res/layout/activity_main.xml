@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/studio_black">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:id="@+id/tvTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="MWA Test Target App"
+            android:textColor="@color/white"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvWalletStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Not connected"
+            android:textColor="@color/dim_white" />
+
+        <Button
+            android:id="@+id/btnConnectWallet"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/rounded_button_bg"
+            android:backgroundTint="@color/btn_connect_bg_selector"
+            android:text="Connect Wallet"
+            android:textColor="@color/btn_connect_text_selector" />
+
+        <Button
+            android:id="@+id/btnSendTest"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/rounded_button_bg"
+            android:backgroundTint="@color/btn_skr_bg_selector"
+            android:enabled="false"
+            android:text="Send Test Transaction"
+            android:textColor="@color/btn_skr_text_selector" />
+
+        <Button
+            android:id="@+id/btnSendLarge"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/rounded_button_bg"
+            android:backgroundTint="@color/btn_skr_bg_selector"
+            android:enabled="false"
+            android:text="Send Large Transaction"
+            android:textColor="@color/btn_skr_text_selector" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="16dp"
+            android:background="@color/border_gray" />
+
+        <ProgressBar
+            android:id="@+id/progressBusy"
+            style="?android:attr/progressBarStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:layout_gravity="center_horizontal"
+            android:indeterminateTint="@color/electric_green"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:textColor="@color/dim_white" />
+
+        <TextView
+            android:id="@+id/tvLastSignature"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="@color/dim_white"
+            android:textSize="12sp"
+            android:visibility="gone" />
+
+    </LinearLayout>
+</ScrollView>

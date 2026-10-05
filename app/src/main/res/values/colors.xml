@@ -1,0 +1,13 @@
+<resources>
+    <!-- Sashy Studios brand palette - see CLAUDE.md "Branding" section for the source of truth. -->
+    <color name="studio_black">#1A1A1A</color>
+    <color name="pure_black">#000000</color>
+    <color name="card_black">#111111</color>
+    <color name="border_gray">#333333</color>
+    <color name="electric_green">#00FF88</color>
+    <color name="deep_green">#006633</color>
+    <color name="solana_purple">#9945FF</color>
+    <color name="error_red">#FF4444</color>
+    <color name="white">#FFFFFF</color>
+    <color name="dim_white">#888888</color>
+</resources>

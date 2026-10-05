@@ -1,32 +1,18 @@
 package com.clockin.mwatestapp
 
 import android.os.Bundle
+import android.view.View
+import android.widget.Button
+import android.widget.ProgressBar
+import android.widget.TextView
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import com.clockin.mwatestapp.ui.theme.SashyColors
-import com.clockin.mwatestapp.ui.theme.SashyTheme
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -38,114 +24,49 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         activityResultSender = ActivityResultSender(this)
+        setContentView(R.layout.activity_main)
 
-        setContent {
-            SashyTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = SashyColors.StudioBlack) {
-                    MainScreen(
-                        viewModel = viewModel,
-                        onConnect = { viewModel.connectWallet(activityResultSender) },
-                        onSendTest = { viewModel.sendTestTransaction(activityResultSender) },
-                        onSendLarge = { viewModel.sendLargeTransaction(activityResultSender) }
-                    )
+        val walletStatusText = findViewById<TextView>(R.id.tvWalletStatus)
+        val connectButton = findViewById<Button>(R.id.btnConnectWallet)
+        val sendTestButton = findViewById<Button>(R.id.btnSendTest)
+        val sendLargeButton = findViewById<Button>(R.id.btnSendLarge)
+        val progressBusy = findViewById<ProgressBar>(R.id.progressBusy)
+        val statusText = findViewById<TextView>(R.id.statusText)
+        val lastSignatureText = findViewById<TextView>(R.id.tvLastSignature)
+
+        connectButton.setOnClickListener { viewModel.connectWallet(activityResultSender) }
+        sendTestButton.setOnClickListener { viewModel.sendTestTransaction(activityResultSender) }
+        sendLargeButton.setOnClickListener { viewModel.sendLargeTransaction(activityResultSender) }
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.uiState.collect { state ->
+                    val busy = state.status == FlowStatus.CONNECTING || state.status == FlowStatus.AWAITING_APPROVAL
+                    val connected = state.walletAddress != null
+
+                    walletStatusText.text = state.walletAddress?.let { "Connected: $it" } ?: "Not connected"
+                    connectButton.isEnabled = !busy
+                    sendTestButton.isEnabled = !busy && connected
+                    sendLargeButton.isEnabled = !busy && connected
+                    progressBusy.visibility = if (busy) View.VISIBLE else View.GONE
+
+                    statusText.text = state.message
+                    statusText.setTextColor(messageColor(state.status))
+
+                    if (state.lastSignature != null) {
+                        lastSignatureText.visibility = View.VISIBLE
+                        lastSignatureText.text = "Last signature: ${state.lastSignature}"
+                    } else {
+                        lastSignatureText.visibility = View.GONE
+                    }
                 }
             }
         }
     }
-}
 
-private fun messageColor(status: FlowStatus): Color = when (status) {
-    FlowStatus.SUCCESS -> SashyColors.DeepGreen
-    FlowStatus.FAILED, FlowStatus.NO_WALLET_FOUND -> SashyColors.ErrorRed
-    else -> SashyColors.DimWhite
-}
-
-@Composable
-private fun MainScreen(
-    viewModel: MainViewModel,
-    onConnect: () -> Unit,
-    onSendTest: () -> Unit,
-    onSendLarge: () -> Unit
-) {
-    val state by viewModel.uiState.collectAsState()
-    val busy = state.status == FlowStatus.CONNECTING || state.status == FlowStatus.AWAITING_APPROVAL
-    val connected = state.walletAddress != null
-
-    val skrButtonColors = ButtonDefaults.buttonColors(
-        containerColor = SashyColors.SolanaPurple,
-        contentColor = SashyColors.White,
-        disabledContainerColor = SashyColors.BorderGray,
-        disabledContentColor = SashyColors.DimWhite
-    )
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text(
-            "MWA Test Target App",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = SashyColors.White
-        )
-        Text(
-            state.walletAddress?.let { "Connected: $it" } ?: "Not connected",
-            color = SashyColors.DimWhite
-        )
-
-        Button(
-            onClick = onConnect,
-            enabled = !busy,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SashyColors.ElectricGreen,
-                contentColor = SashyColors.PureBlack,
-                disabledContainerColor = SashyColors.BorderGray,
-                disabledContentColor = SashyColors.DimWhite
-            )
-        ) {
-            Text("Connect Wallet")
-        }
-        Button(
-            onClick = onSendTest,
-            enabled = !busy && connected,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = skrButtonColors
-        ) {
-            Text("Send Test Transaction")
-        }
-        Button(
-            onClick = onSendLarge,
-            enabled = !busy && connected,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = skrButtonColors
-        ) {
-            Text("Send Large Transaction")
-        }
-
-        HorizontalDivider(color = SashyColors.BorderGray)
-
-        if (busy) {
-            CircularProgressIndicator(color = SashyColors.ElectricGreen)
-        }
-
-        Text(
-            state.message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = messageColor(state.status)
-        )
-
-        state.lastSignature?.let {
-            Text(
-                "Last signature: $it",
-                style = MaterialTheme.typography.bodySmall,
-                color = SashyColors.DimWhite
-            )
-        }
+    private fun messageColor(status: FlowStatus): Int = when (status) {
+        FlowStatus.SUCCESS -> ContextCompat.getColor(this, R.color.deep_green)
+        FlowStatus.FAILED, FlowStatus.NO_WALLET_FOUND -> ContextCompat.getColor(this, R.color.error_red)
+        else -> ContextCompat.getColor(this, R.color.dim_white)
     }
 }

@@ -1,5 +1,5 @@
 <resources>
-    <!-- Window chrome only - all actual UI is Jetpack Compose (see MainActivity). -->
+    <!-- Window chrome only - actual UI is classic Views via activity_main.xml (see MainActivity). -->
     <style name="Theme.MwaTestTargetApp" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">#1A1A1A</item>
         <item name="android:statusBarColor">#000000</item>

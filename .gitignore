@@ -1,0 +1,56 @@
+# Built application files
+*.apk
+*.aab
+*.ap_
+*.aar
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+release/
+
+# Gradle files
+.gradle/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Local configuration file (contains SDK path, per-machine — never commit)
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+.navigation/
+captures/
+.externalNativeBuild
+.cxx
+
+# Keystore files — never commit signing keys
+*.jks
+*.keystore
+
+# Log files
+*.log
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Google Services (if added later — keep out unless intentionally committed)
+google-services.json
+
+# Devnet/test wallet keypairs — never commit private keys
+*.json.key
+test-wallet-*.json
+setup/skr-mint-authority.json

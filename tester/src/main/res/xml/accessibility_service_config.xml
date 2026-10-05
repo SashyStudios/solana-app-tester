@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    packageNames is deliberately omitted (not restricted to the target app): later
+    build days add MWA-specific screen recognition, and the wallet connect/approval
+    dialogs that must be recognized render inside the wallet app (Phantom/Solflare),
+    not inside com.clockin.mwatestapp. Restricting to one package now would block that.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewClicked|typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:canRequestTouchExplorationMode="true"
+    android:canRequestFilterKeyEvents="true"
+    android:notificationTimeout="100"
+    android:description="@string/accessibility_service_description" />

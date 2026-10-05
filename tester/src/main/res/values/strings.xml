@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Solana App Tester</string>
+    <string name="accessibility_service_description">Lets Solana App Tester record and replay UI flows in the MWA Test Target App to detect regressions.</string>
+</resources>

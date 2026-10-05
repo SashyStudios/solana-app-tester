@@ -32,7 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.clockin.apptester.model.displayLabel
+import com.clockin.apptester.model.postTapDetail
+import com.clockin.apptester.model.primaryLabel
 import com.clockin.apptester.ui.theme.SashyColors
 import com.clockin.apptester.ui.theme.SashyTheme
 
@@ -153,8 +154,10 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
                     .padding(12.dp)
             ) {
                 itemsIndexed(steps) { index, step ->
+                    val postTap = step.postTapDetail()
+                    val suffix = if (postTap != null) " (shows \"$postTap\" after tap)" else ""
                     Text(
-                        "${index + 1}. ${step.displayLabel()} | ${step.packageName}",
+                        "${index + 1}. ${step.primaryLabel()} | ${step.packageName}$suffix",
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                         color = SashyColors.ElectricGreen

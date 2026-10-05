@@ -290,3 +290,16 @@ When a replay step fails, say WHY in plain words, using observable differences o
 - Minimal (belongs with break detection, do this one): on a failed step, report "expected <resourceId / label>, not found", list up to 5 clickable elements currently on screen, and flag the closest match (same class, similar position or text) as "possibly renamed".
 - Roadmap (v2): store a snapshot of the screen's clickable elements at each recorded step, then diff against the replay screen to report missing, renamed, moved and newly appeared elements (for example an unexpected dialog).
 - Out of scope: tying a break to a specific commit or code change.
+
+### Pre-tap label fix (Oct 5, applied - not yet re-verified on-device)
+Bug: a recorded step's text/contentDescription are read from event.source on TYPE_VIEW_CLICKED, which Android fires from View.performClick() only after the click handler already ran - so a self-toggling element (SeekShot's "AllShot" flipping to "✕ Cancel" when pressed) was recorded, displayed, and matched on replay using its POST-tap label. That's backwards: the step list, pill and replay log read the flow wrong, and for a resourceId-less step it made replay search for text that doesn't exist on screen yet (the tap that produces it hasn't happened during replay), falsely reporting "flow changed."
+
+Fix: `RecordingAccessibilityService` keeps a label cache (`"packageName/resourceId"` -> previous/current `(text, contentDescription)`), populated only while `RecorderMode.RECORDING` and reset at the start of each session. `TYPE_WINDOW_STATE_CHANGED` (a new screen) seeds it with a full tree walk of clickable nodes - deliberately the heavier path, since screen transitions are rare. `TYPE_WINDOW_CONTENT_CHANGED` (fires far more often) updates only the single node named by `event.source`, no tree walk. On `TYPE_VIEW_CLICKED`, the step is built with `preTapText`/`preTapContentDescription` read from the cache's `previous` slot (the value seen just before this element's own self-triggered content-change, if any), falling back to `current` if there's no prior distinct value.
+
+`RecordedStep.primaryLabel()` is the one name shown anywhere a person reads it (step list, pill line 2, replay log, replay's fallback text match) - pre-tap label, else resourceId, else "(unlabeled)". It deliberately never falls back to the post-tap text/contentDescription. `postTapDetail()` surfaces that value only when it differs from `primaryLabel()`, shown only in the step list, clearly marked ("shows '<text>' after tap").
+
+TEMPORARY `Log.d` (tag `RecordingA11yService`) added for each captured step while recording: resourceId, preTapText, postTapText - to confirm the cache is actually recovering the right value on a real toggle button. Remove once verified. The existing per-event diagnostic log line is unchanged.
+
+Needs an on-device pass against SeekShot's AllShot button specifically: confirm the step list shows "AllShot" (not "✕ Cancel") as the primary label, the secondary detail appears correctly, and replay matches/clicks it without a false break.
+
+Capture logic is necessarily touched (that's where the bug lives). The watchdog's timing/force-stop logic, volume-down's handling, touch exploration (`setTouchExplorationRequested`, still only ever called with `false`), and all MWA/SKR/transaction code are untouched.

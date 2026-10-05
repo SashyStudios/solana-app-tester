@@ -8,7 +8,7 @@ import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.clockin.apptester.model.RecordedStep
-import com.clockin.apptester.model.displayLabel
+import com.clockin.apptester.model.primaryLabel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,6 +25,61 @@ class RecordingAccessibilityService : AccessibilityService() {
     private var countdownJob: Job? = null
     private var pendingTouchExplorationToggle: Job? = null
     private var recordingStatusTicker: Job? = null
+
+    /**
+     * Pre-tap label cache for the toggle-button label bug (see CLAUDE.md status): the
+     * only signal we get for a step's label is TYPE_VIEW_CLICKED, which Android fires
+     * from View.performClick() only after the click handler already ran, so a
+     * self-toggling element (e.g. SeekShot's "AllShot" flipping to "Cancel") would
+     * otherwise be recorded with its post-tap text. Keyed by "packageName/resourceId" -
+     * resourceId alone isn't guaranteed unique across different target apps. Each entry
+     * holds the two most recent distinct values seen for that key, so a click landing
+     * right after its own self-triggered content-change can still read the value from
+     * just before that change (see RecordedStep's doc comment for the full reasoning).
+     * Only populated while RecorderMode.RECORDING (see onAccessibilityEvent); reset at
+     * the start of each recording session via clearLabelCache().
+     */
+    private data class Label(val text: String?, val contentDescription: String?)
+    private data class LabelHistory(val previous: Label?, val current: Label?)
+    private val labelCache = mutableMapOf<String, LabelHistory>()
+
+    internal fun clearLabelCache() {
+        labelCache.clear()
+    }
+
+    /** Records an observed label for a resourceId, shifting the previous value down a
+     *  slot only when something actually changed - skips allocating a new map entry for
+     *  the (overwhelming majority) no-op case, since this runs on every content-changed
+     *  event for a matching element. */
+    private fun observeLabel(packageName: String, resourceId: String, text: String?, contentDescription: String?) {
+        val key = "$packageName/$resourceId"
+        val existing = labelCache[key]
+        val currentLabel = existing?.current
+        if (currentLabel != null && currentLabel.text == text && currentLabel.contentDescription == contentDescription) {
+            return
+        }
+        labelCache[key] = LabelHistory(previous = existing?.current, current = Label(text, contentDescription))
+    }
+
+    /** Full-tree label snapshot - only called on TYPE_WINDOW_STATE_CHANGED (a new
+     *  screen), never per content-changed event, which only updates the single node
+     *  that changed (event.source) instead. Screen transitions are comparatively rare
+     *  next to how often content changes, so the heavier walk is reserved for them. */
+    private fun snapshotLabels(node: AccessibilityNodeInfo, packageName: String) {
+        if (node.isClickable) {
+            node.viewIdResourceName?.let { resourceId ->
+                observeLabel(packageName, resourceId, node.text?.toString(), node.contentDescription?.toString())
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            try {
+                snapshotLabels(child, packageName)
+            } finally {
+                child.recycle()
+            }
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -64,21 +119,77 @@ class RecordingAccessibilityService : AccessibilityService() {
         )
         diagnosticSource?.recycle()
 
+        val isRecording = RecorderBridge.mode.value == RecorderMode.RECORDING
+
+        // Seeds the label cache for every clickable element on a new screen, well
+        // before anything on it could be tapped - see snapshotLabels.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            if (isRecording) {
+                val pkg = event.packageName?.toString()
+                if (pkg != null && pkg != packageName) {
+                    val root = rootInActiveWindow
+                    if (root != null) {
+                        try {
+                            snapshotLabels(root, pkg)
+                        } finally {
+                            root.recycle()
+                        }
+                    }
+                }
+            }
+            return
+        }
+
+        // Lighter per-event update: only the single node named by event.source, not a
+        // full tree walk - this fires far more often than TYPE_WINDOW_STATE_CHANGED.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            if (isRecording) {
+                val pkg = event.packageName?.toString()
+                if (pkg != null && pkg != packageName) {
+                    val src = event.source
+                    val resId = src?.viewIdResourceName
+                    if (resId != null) {
+                        observeLabel(pkg, resId, src.text?.toString(), src.contentDescription?.toString())
+                    }
+                    src?.recycle()
+                }
+            }
+            return
+        }
+
         if (event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) return
         // Skip the tester tool's own UI (e.g. taps on "Stop Recording"/"Replay") - the
         // service has no packageNames filter so it can later see into the wallet app,
         // but that means our own controls would otherwise get recorded as steps too.
         if (event.packageName?.toString() == packageName) return
         val source = event.source ?: return
+        val stepPackageName = event.packageName?.toString()
+        if (stepPackageName == null) {
+            source.recycle()
+            return
+        }
+        val resourceId = source.viewIdResourceName
+        val history = resourceId?.let { labelCache["$stepPackageName/$it"] }
+        val preTap = history?.previous ?: history?.current
         val step = RecordedStep(
-            packageName = event.packageName?.toString() ?: run { source.recycle(); return },
+            packageName = stepPackageName,
             className = source.className?.toString(),
-            resourceId = source.viewIdResourceName,
+            resourceId = resourceId,
             text = source.text?.toString(),
-            contentDescription = source.contentDescription?.toString()
+            contentDescription = source.contentDescription?.toString(),
+            preTapText = preTap?.text,
+            preTapContentDescription = preTap?.contentDescription
         )
         source.recycle()
         RecorderBridge.appendStep(step)
+        if (isRecording) {
+            // TEMPORARY - pre-tap label fix investigation (see CLAUDE.md status). Remove
+            // once this has been verified reliable on-device.
+            Log.d(
+                "RecordingA11yService",
+                "captured step resourceId=$resourceId preTapText=${step.preTapText} postTapText=${step.text}"
+            )
+        }
     }
 
     override fun onInterrupt() {
@@ -201,7 +312,7 @@ class RecordingAccessibilityService : AccessibilityService() {
 
                 val remainingSeconds = minOf(inactivityRemainingMs, hardCapRemainingMs) / 1000
                 val showDetail = now - lastCapturedAtMs < STEP_DETAIL_VISIBLE_MS
-                statusPill.showRecording(steps.size, steps.lastOrNull()?.displayLabel(), remainingSeconds, showDetail)
+                statusPill.showRecording(steps.size, steps.lastOrNull()?.primaryLabel(), remainingSeconds, showDetail)
                 delay(1000L)
             }
             recordingStatusTicker = null
@@ -269,7 +380,7 @@ class RecordingAccessibilityService : AccessibilityService() {
             var completedSteps = 0
             var broke = false
             for ((index, step) in steps.withIndex()) {
-                statusPill.showReplay(index + 1, steps.size, step.displayLabel())
+                statusPill.showReplay(index + 1, steps.size, step.primaryLabel())
                 val root = rootInActiveWindow
                 if (root == null) {
                     RecorderBridge.appendLog("Step ${index + 1}/${steps.size}: no active window - stopping.")
@@ -282,7 +393,7 @@ class RecordingAccessibilityService : AccessibilityService() {
                 if (target == null) {
                     RecorderBridge.appendLog(
                         "Step ${index + 1}/${steps.size}: expected view not found " +
-                            "(resourceId=${step.resourceId}, text=${step.text}) - flow changed."
+                            "(resourceId=${step.resourceId}, searched text=${step.preTapText ?: step.preTapContentDescription}) - flow changed."
                     )
                     statusPill.showBreak(index + 1)
                     broke = true
@@ -290,7 +401,7 @@ class RecordingAccessibilityService : AccessibilityService() {
                 }
                 target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 target.recycle()
-                RecorderBridge.appendLog("Step ${index + 1}/${steps.size}: tapped ${step.displayLabel()}")
+                RecorderBridge.appendLog("Step ${index + 1}/${steps.size}: tapped ${step.primaryLabel()}")
                 completedSteps++
                 delay(REPLAY_STEP_DELAY_MS)
             }
@@ -307,7 +418,12 @@ class RecordingAccessibilityService : AccessibilityService() {
             val match = root.findAccessibilityNodeInfosByViewId(id).firstOrNull()
             if (match != null) return match
         }
-        step.text?.let { text ->
+        // Pre-tap label, not step.text - step.text is the post-tap value, which for a
+        // self-toggling element doesn't exist on screen yet at this point in replay
+        // (the tap that would produce it hasn't happened), so searching for it would
+        // find nothing and falsely report a break. See CLAUDE.md status.
+        val fallbackText = step.preTapText ?: step.preTapContentDescription
+        fallbackText?.let { text ->
             val match = root.findAccessibilityNodeInfosByText(text)
                 .firstOrNull { it.className == step.className }
             if (match != null) return match

@@ -78,6 +78,7 @@ object RecorderBridge {
             return
         }
         _recordedSteps.value = emptyList()
+        svc.clearLabelCache()
         _mode.value = RecorderMode.COUNTDOWN
         svc.beginRecordingCountdown()
     }

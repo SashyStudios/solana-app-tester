@@ -71,6 +71,16 @@ class StatusPill(private val service: AccessibilityService) {
         render(line1Text = "REC - $stepCount steps", line2Text = detail, isError = false)
     }
 
+    /** TEMPORARY - experiment mode's live counters while recording (see
+     *  RecordingAccessibilityService.startRecordingStatusTicker's experimentMode branch). */
+    fun showExperimentRecording(stepCount: Int, clicks: Int, dropped: Int) {
+        render(
+            line1Text = "REC - $stepCount steps",
+            line2Text = "clicks: $clicks | recorded: $stepCount | dropped (no source): $dropped",
+            isError = false
+        )
+    }
+
     fun showStopped(stepCount: Int) {
         render(line1Text = "STOPPED - $stepCount steps", line2Text = null, isError = false)
         scheduleHide(STOPPED_FADE_DELAY_MS)

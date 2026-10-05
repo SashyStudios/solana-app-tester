@@ -49,20 +49,39 @@ class RecordingAccessibilityService : AccessibilityService() {
         // taps don't produce TYPE_VIEW_CLICKED with touch exploration off. Remove once
         // that's resolved. Fetches its own source and recycles it immediately rather
         // than reusing the fetch below, so it doesn't change what that existing code does.
+        // touchExploration reads the live flag straight off serviceInfo rather than
+        // tracking a separate field, so this stays a pure read with zero risk to
+        // setTouchExplorationRequested's own deferred-toggle logic.
         val diagnosticSource = event.source
+        val touchExplorationOn =
+            (serviceInfo?.flags ?: 0) and AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE != 0
         Log.d(
             "RecordingA11yService",
             "event type=${AccessibilityEvent.eventTypeToString(event.eventType)} " +
-                "package=${event.packageName} sourceNull=${diagnosticSource == null}"
+                "package=${event.packageName} sourceNull=${diagnosticSource == null} " +
+                "touchExploration=${if (touchExplorationOn) "on" else "off"}"
         )
         diagnosticSource?.recycle()
 
         if (event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) return
+
+        // TEMPORARY experiment counters (see RecorderBridge.startExperimentRecordingCountdown)
+        // - only increment while that specific session is running, reset at its start.
+        if (RecorderBridge.isExperimentRecording) {
+            RecorderBridge.recordExperimentClick()
+        }
+
         // Skip the tester tool's own UI (e.g. taps on "Stop Recording"/"Replay") - the
         // service has no packageNames filter so it can later see into the wallet app,
         // but that means our own controls would otherwise get recorded as steps too.
         if (event.packageName?.toString() == packageName) return
-        val source = event.source ?: return
+        val source = event.source
+        if (source == null) {
+            if (RecorderBridge.isExperimentRecording) {
+                RecorderBridge.recordExperimentDropped()
+            }
+            return
+        }
         val step = RecordedStep(
             packageName = event.packageName?.toString() ?: run { source.recycle(); return },
             className = source.className?.toString(),
@@ -113,8 +132,13 @@ class RecordingAccessibilityService : AccessibilityService() {
      * RecorderBridge.appendStep), so the user can leave this app, open the target app,
      * and use normal touches while it counts down. Only beginRecording() (called once it
      * reaches zero) requests touch exploration and flips the mode over.
+     *
+     * onComplete defaults to the normal flow (RecorderBridge.beginRecording()); every
+     * existing call site uses that default unchanged. TEMPORARY experiment mode passes
+     * RecorderBridge.beginExperimentRecording() instead, so the countdown itself - same
+     * 7 ticks, same pill - is shared between both without duplicating this loop.
      */
-    fun beginRecordingCountdown() {
+    fun beginRecordingCountdown(onComplete: () -> Unit = { RecorderBridge.beginRecording() }) {
         // Clears any stale pill state (e.g. a still-fading "REPLAY OK" from a previous
         // run) immediately, rather than leaving it visible until the first countdown tick.
         statusPill.hide()
@@ -127,7 +151,7 @@ class RecordingAccessibilityService : AccessibilityService() {
             }
             countdownJob = null
             RecorderBridge.setCountdownSecondsRemaining(null)
-            RecorderBridge.beginRecording()
+            onComplete()
         }
     }
 
@@ -155,8 +179,13 @@ class RecordingAccessibilityService : AccessibilityService() {
      * the button use). Exits on its own once mode leaves RECORDING for any other
      * reason; whichever stop path triggered that is responsible for what the pill
      * shows afterwards.
+     *
+     * experimentMode only changes what gets displayed each tick (live click/recorded/
+     * dropped counters instead of the normal last-step/auto-stop detail line) - the
+     * inactivity timeout, hard cap, and force-stop path above are identical either way,
+     * so the watchdog behaves exactly the same regardless of which flow started it.
      */
-    internal fun startRecordingStatusTicker() {
+    internal fun startRecordingStatusTicker(experimentMode: Boolean = false) {
         // Clears any stale pill state immediately - the countdown's own pill already
         // covers the gap up to this point, so this is mostly belt-and-suspenders.
         statusPill.hide()
@@ -191,9 +220,17 @@ class RecordingAccessibilityService : AccessibilityService() {
                     return@launch
                 }
 
-                val remainingSeconds = minOf(inactivityRemainingMs, hardCapRemainingMs) / 1000
-                val showDetail = now - lastCapturedAtMs < STEP_DETAIL_VISIBLE_MS
-                statusPill.showRecording(steps.size, steps.lastOrNull()?.displayLabel(), remainingSeconds, showDetail)
+                if (experimentMode) {
+                    statusPill.showExperimentRecording(
+                        steps.size,
+                        RecorderBridge.experimentClickCount(),
+                        RecorderBridge.experimentDroppedCount()
+                    )
+                } else {
+                    val remainingSeconds = minOf(inactivityRemainingMs, hardCapRemainingMs) / 1000
+                    val showDetail = now - lastCapturedAtMs < STEP_DETAIL_VISIBLE_MS
+                    statusPill.showRecording(steps.size, steps.lastOrNull()?.displayLabel(), remainingSeconds, showDetail)
+                }
                 delay(1000L)
             }
             recordingStatusTicker = null

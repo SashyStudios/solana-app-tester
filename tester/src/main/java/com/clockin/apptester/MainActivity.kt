@@ -113,6 +113,26 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
             Text(startButtonLabel)
         }
 
+        // TEMPORARY experiment mode: a second, independent entry point that reuses the
+        // same countdown/RECORDING mode as the button above, just without ever
+        // requesting touch exploration. Only startable from IDLE - the button above
+        // already relabels to Cancel/Stop and works for this session too, since it's
+        // driven by the same shared mode state, not by which button started things.
+        Button(
+            onClick = { RecorderBridge.startExperimentRecordingCountdown() },
+            enabled = serviceConnected && mode == RecorderMode.IDLE,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = SashyColors.BorderGray,
+                contentColor = SashyColors.White,
+                disabledContainerColor = SashyColors.BorderGray,
+                disabledContentColor = SashyColors.DimWhite
+            )
+        ) {
+            Text("Record (normal touch, experiment)")
+        }
+
         if (mode == RecorderMode.COUNTDOWN) {
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(

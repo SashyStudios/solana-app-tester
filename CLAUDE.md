@@ -124,6 +124,10 @@ writing pattern-matching logic — don't guess at resource IDs or text content.
 - [ ] GitHub repo that clones and runs — verify this yourself before submitting,
       don't assume
 - [ ] Pitch deck / short presentation
+- [ ] Origin story: Josh's real testing pain point (hard to find testers, building and
+      testing solo). Use it in the README intro, the first 20-30 seconds of the demo
+      video, and slide 2 of the pitch deck. Needs Josh's own words before it can be
+      drafted.
 
 ## Branding — Sashy Studios identity (apply lightly, not deep per-screen polish)
 This app is a Sashy Studios product and should read as one at a glance — in the demo

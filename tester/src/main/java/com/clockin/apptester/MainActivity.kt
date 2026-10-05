@@ -93,7 +93,7 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
         // Start/Cancel/Stop is one button whose label and action follow the current mode -
         // a tap during the countdown cancels it, mirroring what volume-down does.
         val (startButtonLabel, startButtonAction) = when (mode) {
-            RecorderMode.RECORDING -> "Stop Recording" to { RecorderBridge.stopRecording() }
+            RecorderMode.RECORDING -> "Stop Recording" to { RecorderBridge.stopRecordingManually() }
             RecorderMode.COUNTDOWN -> "Cancel Countdown" to { RecorderBridge.cancelCountdown() }
             else -> "Start Recording" to { RecorderBridge.startRecordingCountdown() }
         }

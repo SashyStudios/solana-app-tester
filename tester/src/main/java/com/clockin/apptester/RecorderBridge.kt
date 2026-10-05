@@ -84,6 +84,7 @@ object RecorderBridge {
     internal fun beginRecording() {
         _mode.value = RecorderMode.RECORDING
         service?.setTouchExplorationRequested(true)
+        service?.startRecordingStatusTicker()
     }
 
     /** Cancels an in-progress countdown (button re-tap or volume-down). Touch exploration
@@ -98,6 +99,14 @@ object RecorderBridge {
     fun stopRecording() {
         _mode.value = RecorderMode.IDLE
         service?.setTouchExplorationRequested(false)
+    }
+
+    /** Stop via the "Stop Recording" button or volume-down (not the watchdog, which
+     *  removes the pill itself instead - see RecordingAccessibilityService). Shows the
+     *  "STOPPED - N steps" pill, which fades on its own a few seconds later. */
+    fun stopRecordingManually() {
+        stopRecording()
+        service?.statusPill?.showStopped(_recordedSteps.value.size)
     }
 
     fun startReplay() {

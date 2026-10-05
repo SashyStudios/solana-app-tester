@@ -18,9 +18,12 @@ import kotlinx.coroutines.launch
 class RecordingAccessibilityService : AccessibilityService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    internal val statusPill = StatusPill(this)
+
     private var countdownJob: Job? = null
     private var pendingTouchExplorationToggle: Job? = null
     private var recordingWatchdog: Job? = null
+    private var recordingStatusTicker: Job? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -35,6 +38,7 @@ class RecordingAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        statusPill.hide()
         RecorderBridge.detachService(this)
         scope.cancel()
         super.onDestroy()
@@ -83,7 +87,7 @@ class RecordingAccessibilityService : AccessibilityService() {
             }
             RecorderMode.RECORDING -> {
                 RecorderBridge.appendLog("Volume-down pressed - stopping recording and disabling touch exploration.")
-                RecorderBridge.stopRecording()
+                RecorderBridge.stopRecordingManually()
                 true
             }
             else -> super.onKeyEvent(event)
@@ -91,18 +95,19 @@ class RecordingAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Runs the pre-recording countdown, announcing each second to RecorderBridge. Touch
-     * exploration is never requested here and nothing gets recorded during this window
-     * (recording only happens while RecorderMode.RECORDING - see RecorderBridge.appendStep),
-     * so the user can leave this app, open the target app, and use normal touches while it
-     * counts down. Only beginRecording() (called once it reaches zero) requests touch
-     * exploration and flips the mode over.
+     * Runs the pre-recording countdown, announcing each second to RecorderBridge and the
+     * status pill. Touch exploration is never requested here and nothing gets recorded
+     * during this window (recording only happens while RecorderMode.RECORDING - see
+     * RecorderBridge.appendStep), so the user can leave this app, open the target app,
+     * and use normal touches while it counts down. Only beginRecording() (called once it
+     * reaches zero) requests touch exploration and flips the mode over.
      */
     fun beginRecordingCountdown() {
         countdownJob?.cancel()
         countdownJob = scope.launch {
             for (remaining in RECORDING_COUNTDOWN_SECONDS downTo 1) {
                 RecorderBridge.setCountdownSecondsRemaining(remaining)
+                statusPill.showCountdown(remaining)
                 delay(1000L)
             }
             countdownJob = null
@@ -112,11 +117,36 @@ class RecordingAccessibilityService : AccessibilityService() {
     }
 
     /** Cancels an in-progress countdown. Touch exploration was never requested for it,
-     *  so there's nothing to undo besides the timer itself. */
+     *  so there's nothing to undo besides the timer itself; the pill comes down too. */
     fun cancelRecordingCountdown() {
         countdownJob?.cancel()
         countdownJob = null
         RecorderBridge.setCountdownSecondsRemaining(null)
+        statusPill.hide()
+    }
+
+    /**
+     * Keeps the pill's "REC - N steps" line live while RecorderMode.RECORDING: step
+     * count, the most recently captured step's label, and time left before the watchdog
+     * (reads RECORDING_WATCHDOG_TIMEOUT_MS below purely for display - the watchdog's own
+     * timing in setTouchExplorationRequested is untouched) auto-stops things. Exits on
+     * its own once mode leaves RECORDING; whichever stop path triggered that is
+     * responsible for what the pill shows afterwards.
+     */
+    internal fun startRecordingStatusTicker() {
+        recordingStatusTicker?.cancel()
+        val startedAtMs = System.currentTimeMillis()
+        recordingStatusTicker = scope.launch {
+            while (RecorderBridge.mode.value == RecorderMode.RECORDING) {
+                val elapsedSeconds = (System.currentTimeMillis() - startedAtMs) / 1000
+                val remainingSeconds =
+                    (RECORDING_WATCHDOG_TIMEOUT_MS / 1000 - elapsedSeconds).coerceAtLeast(0)
+                val steps = RecorderBridge.recordedSteps.value
+                statusPill.showRecording(steps.size, steps.lastOrNull()?.displayLabel(), remainingSeconds)
+                delay(1000L)
+            }
+            recordingStatusTicker = null
+        }
     }
 
     /**
@@ -163,6 +193,7 @@ class RecordingAccessibilityService : AccessibilityService() {
                     "Recording watchdog: no stop received after " +
                         "${RECORDING_WATCHDOG_TIMEOUT_MS / 1000}s - forcing stop."
                 )
+                statusPill.hide()
                 RecorderBridge.stopRecording()
             }
         } else {
@@ -189,9 +220,11 @@ class RecordingAccessibilityService : AccessibilityService() {
                 }
             }
             for ((index, step) in steps.withIndex()) {
+                statusPill.showReplay(index + 1, steps.size)
                 val root = rootInActiveWindow
                 if (root == null) {
                     RecorderBridge.appendLog("Step ${index + 1}/${steps.size}: no active window - stopping.")
+                    statusPill.showBreak(index + 1)
                     break
                 }
                 val target = findNode(root, step)
@@ -201,6 +234,7 @@ class RecordingAccessibilityService : AccessibilityService() {
                         "Step ${index + 1}/${steps.size}: expected view not found " +
                             "(resourceId=${step.resourceId}, text=${step.text}) - flow changed."
                     )
+                    statusPill.showBreak(index + 1)
                     break
                 }
                 target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
@@ -245,3 +279,5 @@ class RecordingAccessibilityService : AccessibilityService() {
         private const val RECORDING_COUNTDOWN_SECONDS = 7
     }
 }
+
+private fun RecordedStep.displayLabel(): String? = text ?: contentDescription ?: resourceId

@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
-enum class RecorderMode { IDLE, RECORDING, REPLAYING }
+enum class RecorderMode { IDLE, COUNTDOWN, RECORDING, REPLAYING }
 
 /**
  * Shared state between the AccessibilityService (which Android creates/destroys on
@@ -27,6 +27,9 @@ object RecorderBridge {
 
     private val _replayLog = MutableStateFlow<List<String>>(emptyList())
     val replayLog: StateFlow<List<String>> = _replayLog.asStateFlow()
+
+    private val _countdownSecondsRemaining = MutableStateFlow<Int?>(null)
+    val countdownSecondsRemaining: StateFlow<Int?> = _countdownSecondsRemaining.asStateFlow()
 
     internal fun attachService(instance: RecordingAccessibilityService) {
         service = instance
@@ -54,10 +57,42 @@ object RecorderBridge {
         _mode.value = RecorderMode.IDLE
     }
 
-    fun startRecording() {
+    /** Called by the service's countdown loop on every tick; null once it ends. */
+    internal fun setCountdownSecondsRemaining(seconds: Int?) {
+        _countdownSecondsRemaining.value = seconds
+    }
+
+    /**
+     * Starts the pre-recording countdown. Touch exploration stays off and nothing is
+     * recorded while it counts down - the service only requests touch exploration and
+     * flips into RecorderMode.RECORDING once it reaches zero (see beginRecording).
+     */
+    fun startRecordingCountdown() {
+        if (_mode.value != RecorderMode.IDLE) return
+        val svc = service
+        if (svc == null) {
+            appendLog("Cannot start recording: accessibility service not connected.")
+            return
+        }
         _recordedSteps.value = emptyList()
+        _mode.value = RecorderMode.COUNTDOWN
+        svc.beginRecordingCountdown()
+    }
+
+    /** Called by the service once the countdown reaches zero - the only point where
+     *  touch exploration actually gets requested. */
+    internal fun beginRecording() {
         _mode.value = RecorderMode.RECORDING
         service?.setTouchExplorationRequested(true)
+    }
+
+    /** Cancels an in-progress countdown (button re-tap or volume-down). Touch exploration
+     *  was never requested for it, so there's nothing to disable - only the timer stops. */
+    fun cancelCountdown() {
+        if (_mode.value != RecorderMode.COUNTDOWN) return
+        _mode.value = RecorderMode.IDLE
+        _countdownSecondsRemaining.value = null
+        service?.cancelRecordingCountdown()
     }
 
     fun stopRecording() {

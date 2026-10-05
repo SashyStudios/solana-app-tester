@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -54,6 +56,7 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
     val mode by RecorderBridge.mode.collectAsState()
     val steps by RecorderBridge.recordedSteps.collectAsState()
     val log by RecorderBridge.replayLog.collectAsState()
+    val countdown by RecorderBridge.countdownSecondsRemaining.collectAsState()
 
     Column(
         modifier = Modifier
@@ -87,11 +90,16 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
             }
         }
 
+        // Start/Cancel/Stop is one button whose label and action follow the current mode -
+        // a tap during the countdown cancels it, mirroring what volume-down does.
+        val (startButtonLabel, startButtonAction) = when (mode) {
+            RecorderMode.RECORDING -> "Stop Recording" to { RecorderBridge.stopRecording() }
+            RecorderMode.COUNTDOWN -> "Cancel Countdown" to { RecorderBridge.cancelCountdown() }
+            else -> "Start Recording" to { RecorderBridge.startRecordingCountdown() }
+        }
+
         Button(
-            onClick = {
-                if (mode == RecorderMode.RECORDING) RecorderBridge.stopRecording()
-                else RecorderBridge.startRecording()
-            },
+            onClick = startButtonAction,
             enabled = serviceConnected && mode != RecorderMode.REPLAYING,
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
@@ -102,7 +110,30 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
                 disabledContentColor = SashyColors.DimWhite
             )
         ) {
-            Text(if (mode == RecorderMode.RECORDING) "Stop Recording" else "Start Recording")
+            Text(startButtonLabel)
+        }
+
+        if (mode == RecorderMode.COUNTDOWN) {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    (countdown ?: 0).toString(),
+                    style = MaterialTheme.typography.displayLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = SashyColors.ElectricGreen
+                )
+            }
+            Text(
+                "Touch exploration is off - switch to the target app now with normal touches.",
+                color = SashyColors.DimWhite
+            )
+        }
+
+        if (mode == RecorderMode.RECORDING) {
+            Text(
+                "Recording. Two-finger tap to click. Volume-down to stop.",
+                fontWeight = FontWeight.Bold,
+                color = SashyColors.ElectricGreen
+            )
         }
 
         Text("Recorded steps: ${steps.size}", color = SashyColors.DimWhite)

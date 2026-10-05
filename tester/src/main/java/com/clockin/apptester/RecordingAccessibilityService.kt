@@ -18,14 +18,15 @@ import kotlinx.coroutines.launch
 class RecordingAccessibilityService : AccessibilityService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var countdownJob: Job? = null
     private var pendingTouchExplorationToggle: Job? = null
     private var recordingWatchdog: Job? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         // Requested once, permanently - unlike touch exploration this isn't toggled
-        // per-recording. onKeyEvent below only acts on it while RecorderMode.RECORDING,
-        // so volume behaves normally the rest of the time.
+        // per-recording. onKeyEvent below only acts on it while RecorderMode.RECORDING
+        // or RecorderMode.COUNTDOWN, so volume behaves normally the rest of the time.
         serviceInfo?.let { info ->
             info.flags = info.flags or AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
             serviceInfo = info
@@ -62,20 +63,60 @@ class RecordingAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Emergency stop: volume-down, while actively recording, stops recording and drops
-     * touch exploration the same way the "Stop Recording" button does - a hardware-key
-     * escape hatch that still works if the touchscreen itself is unresponsive. Only
-     * consumed (return true, so the device's volume doesn't also change) while
-     * RecorderMode.RECORDING; otherwise the key passes through for normal volume behavior.
+     * Emergency stop / cancel: volume-down during RecorderMode.RECORDING stops recording
+     * and drops touch exploration the same way the "Stop Recording" button does - a
+     * hardware-key escape hatch that still works if the touchscreen itself is
+     * unresponsive. During RecorderMode.COUNTDOWN it instead cancels the countdown before
+     * touch exploration is ever requested. Only consumed (return true, so the device's
+     * volume doesn't also change) in those two modes; otherwise the key passes through
+     * for normal volume behavior.
      */
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) return super.onKeyEvent(event)
         if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0) return super.onKeyEvent(event)
-        if (RecorderBridge.mode.value != RecorderMode.RECORDING) return super.onKeyEvent(event)
 
-        RecorderBridge.appendLog("Volume-down pressed - stopping recording and disabling touch exploration.")
-        RecorderBridge.stopRecording()
-        return true
+        return when (RecorderBridge.mode.value) {
+            RecorderMode.COUNTDOWN -> {
+                RecorderBridge.appendLog("Volume-down pressed - countdown cancelled.")
+                RecorderBridge.cancelCountdown()
+                true
+            }
+            RecorderMode.RECORDING -> {
+                RecorderBridge.appendLog("Volume-down pressed - stopping recording and disabling touch exploration.")
+                RecorderBridge.stopRecording()
+                true
+            }
+            else -> super.onKeyEvent(event)
+        }
+    }
+
+    /**
+     * Runs the pre-recording countdown, announcing each second to RecorderBridge. Touch
+     * exploration is never requested here and nothing gets recorded during this window
+     * (recording only happens while RecorderMode.RECORDING - see RecorderBridge.appendStep),
+     * so the user can leave this app, open the target app, and use normal touches while it
+     * counts down. Only beginRecording() (called once it reaches zero) requests touch
+     * exploration and flips the mode over.
+     */
+    fun beginRecordingCountdown() {
+        countdownJob?.cancel()
+        countdownJob = scope.launch {
+            for (remaining in RECORDING_COUNTDOWN_SECONDS downTo 1) {
+                RecorderBridge.setCountdownSecondsRemaining(remaining)
+                delay(1000L)
+            }
+            countdownJob = null
+            RecorderBridge.setCountdownSecondsRemaining(null)
+            RecorderBridge.beginRecording()
+        }
+    }
+
+    /** Cancels an in-progress countdown. Touch exploration was never requested for it,
+     *  so there's nothing to undo besides the timer itself. */
+    fun cancelRecordingCountdown() {
+        countdownJob?.cancel()
+        countdownJob = null
+        RecorderBridge.setCountdownSecondsRemaining(null)
     }
 
     /**
@@ -199,5 +240,8 @@ class RecordingAccessibilityService : AccessibilityService() {
         // Safety net: auto-stop recording (and touch exploration with it) if nothing
         // else stopped it within a minute - see setTouchExplorationRequested.
         private const val RECORDING_WATCHDOG_TIMEOUT_MS = 60_000L
+
+        // Pre-recording window before touch exploration turns on - see beginRecordingCountdown.
+        private const val RECORDING_COUNTDOWN_SECONDS = 7
     }
 }

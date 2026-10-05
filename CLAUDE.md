@@ -202,3 +202,36 @@ time is short.
   want to check" model. Bigger build (persistent Accessibility Service, a trigger
   mechanism for when to re-test, notifications, battery/permissions handling).
   Not v1.
+
+## Status and decisions as of Oct 4 (deadline Oct 8)
+
+Where this section conflicts with earlier text in this file, this section wins.
+
+### Verified on the Seeker
+- Accessibility service enables, the self-click filter works, and both safety exits fired correctly: volume-down stop and the 60s watchdog.
+
+### NOT verified, do not describe as working
+- Replay has never run successfully on the device. The first recording test captured 0 steps. After the touch exploration change, one Settings row was captured, with no text and no resource ID.
+- The countdown compiles but has not been tested on the device.
+
+### Touch exploration finding
+- While recording, touch exploration makes single taps only select, double-tap does not click, and one-finger swipes do not navigate. What looked like a freeze was this behavior, not a crash. A two-finger tap does click.
+- That is unacceptable as the recording experience. Requirement: while recording, one-finger touches (tap, swipe, navigate) must behave normally.
+- The capture method is under review. Candidates: (0) find out why ordinary taps do not emit TYPE_VIEW_CLICKED on API 36, since this may be a config problem; (A) TouchInteractionController; (B) transparent accessibility overlay with dispatchGesture re-dispatch; (C) guided step capture from the accessibility tree; (D) scripted step list for the demo app, with live recording shown as roadmap.
+- Cutoff: if one-finger record and replay of a single tap is not reliable by end of Oct 5, switch to option D. Say so explicitly, do not drift.
+
+### Status pill (build next)
+A display-only floating pill, TYPE_ACCESSIBILITY_OVERLAY, plain Android views. Top-center under the status bar. Black at 55% opacity, fully rounded, green #00FF88 monospace text, small green S at the left, soft green glow at about 20% opacity, pulsing dot every 1.5 seconds. FLAG_NOT_TOUCHABLE and FLAG_NOT_FOCUSABLE so touches always pass through. States: countdown "STARTING IN 5"; recording "REC - 3 steps" plus line 2 "last: <label or (unlabeled)> | auto-stop 0:42 | VOL-DOWN STOP"; stopped "STOPPED - 3 steps" fading after 3s; replay "REPLAY - step 2/5"; break in red #FF4444 "FLOW CHANGED - step 3". Remove the overlay when the service disconnects, recording is cancelled, or the watchdog fires.
+
+### Test rules
+- I run any risky on-device test by hand. You may build with gradlew and install with adb, but never start the accessibility service via adb settings put (I enable it in Settings so the confirmation dialog appears), and never tap anything on the phone unless I ask.
+- Replay test target: the demo app's Connect Wallet button (Compose, exposes text). Settings rows record with no text or ID, so replay cannot find them. Close the wallet picker without selecting a wallet.
+- Never connect my real wallet. The devnet test wallet and the SKR mint are not finished. The setup script is waiting on devnet SOL for the mint authority.
+- If the screen locks up: hold Power for about 10 seconds.
+
+### STRETCH, only after one-finger record and replay is proven
+- Per-app saved recordings: one small JSON file per target package in app storage, plus a simple list screen where I pick an app and press Replay. Also fixes the current problems that a second recording overwrites the first and recordings are lost if the tester process dies. No cloud, no database, no multiple flows per app.
+- Full version (named flows, several per app, segments) goes in the pitch deck roadmap only.
+
+### Git
+- Repo is pushed: github.com/SashyStudios/solana-app-tester. Commit 9f0af0c (countdown) is local only. Commits use the GitHub noreply email. setup/skr-mint-authority.json must never be committed.

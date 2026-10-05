@@ -6,6 +6,17 @@ their own app once (wallet connect, transaction approval, etc.) and replay it on
 future builds to catch regressions. Built for the CLOCK IN Solana Mobile hackathon.
 Submission deadline: Oct 8, 2026.
 
+## Who uses this
+The users are developers building Solana Mobile apps. Every decision should serve them:
+- Truthful output: logs, step names and results must be accurate and never misleading, even cosmetically. A wrong label in a test tool is a product defect.
+- Explain failures: say what was expected, what was found, and show the screenshot. Report observable differences only, never claim to know the code change.
+- Be honest about limits: if the tool can't see something (for example a Compose screen), say so in the output instead of failing silently.
+- Safe by default: devnet only; warn or refuse if a real/mainnet wallet is involved.
+- Repeatable: the same flow gives the same result every run.
+- Fast to start: setup state and next step must be obvious on the main screen.
+- Shareable: results copyable as plain text (stretch, after core features).
+When a design choice is unclear, choose what a developer would want to read in a bug report.
+
 ## Working relationship
 - Full-file drops only — never partial patches or diffs.
 - Push back on scope creep. If a suggested feature isn't in the MUST-HAVE list below,
@@ -273,3 +284,9 @@ Changed from the flat 60s timer described below (that version is what the "Verif
 
 ### Git
 - Repo is pushed: github.com/SashyStudios/solana-app-tester. Commit 9f0af0c (countdown) is local only. Commits use the GitHub noreply email. setup/skr-mint-authority.json must never be committed.
+
+### Break explanations (idea from Josh)
+When a replay step fails, say WHY in plain words, using observable differences only. Don't claim to know the code change.
+- Minimal (belongs with break detection, do this one): on a failed step, report "expected <resourceId / label>, not found", list up to 5 clickable elements currently on screen, and flag the closest match (same class, similar position or text) as "possibly renamed".
+- Roadmap (v2): store a snapshot of the screen's clickable elements at each recorded step, then diff against the replay screen to report missing, renamed, moved and newly appeared elements (for example an unexpected dialog).
+- Out of scope: tying a break to a specific commit or code change.

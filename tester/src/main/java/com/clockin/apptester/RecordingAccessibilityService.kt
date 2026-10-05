@@ -136,13 +136,21 @@ class RecordingAccessibilityService : AccessibilityService() {
     internal fun startRecordingStatusTicker() {
         recordingStatusTicker?.cancel()
         val startedAtMs = System.currentTimeMillis()
+        var lastStepCount = -1
+        var lastCapturedAtMs = 0L
         recordingStatusTicker = scope.launch {
             while (RecorderBridge.mode.value == RecorderMode.RECORDING) {
-                val elapsedSeconds = (System.currentTimeMillis() - startedAtMs) / 1000
+                val now = System.currentTimeMillis()
+                val elapsedSeconds = (now - startedAtMs) / 1000
                 val remainingSeconds =
                     (RECORDING_WATCHDOG_TIMEOUT_MS / 1000 - elapsedSeconds).coerceAtLeast(0)
                 val steps = RecorderBridge.recordedSteps.value
-                statusPill.showRecording(steps.size, steps.lastOrNull()?.displayLabel(), remainingSeconds)
+                if (steps.size != lastStepCount) {
+                    lastStepCount = steps.size
+                    lastCapturedAtMs = now
+                }
+                val showDetail = now - lastCapturedAtMs < STEP_DETAIL_VISIBLE_MS
+                statusPill.showRecording(steps.size, steps.lastOrNull()?.displayLabel(), remainingSeconds, showDetail)
                 delay(1000L)
             }
             recordingStatusTicker = null
@@ -277,6 +285,10 @@ class RecordingAccessibilityService : AccessibilityService() {
 
         // Pre-recording window before touch exploration turns on - see beginRecordingCountdown.
         private const val RECORDING_COUNTDOWN_SECONDS = 7
+
+        // How long the pill's second line stays visible after a new step is captured -
+        // see startRecordingStatusTicker.
+        private const val STEP_DETAIL_VISIBLE_MS = 2000L
     }
 }
 

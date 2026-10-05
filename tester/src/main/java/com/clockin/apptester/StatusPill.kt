@@ -50,16 +50,20 @@ class StatusPill(private val service: AccessibilityService) {
         render(line1Text = "STARTING IN $secondsRemaining", line2Text = null, isError = false)
     }
 
-    fun showRecording(stepCount: Int, lastStepLabel: String?, autoStopSecondsRemaining: Long) {
-        val minutes = autoStopSecondsRemaining / 60
-        val seconds = autoStopSecondsRemaining % 60
-        val autoStop = String.format(Locale.US, "%d:%02d", minutes, seconds)
-        val last = lastStepLabel ?: "(unlabeled)"
-        render(
-            line1Text = "REC - $stepCount steps",
-            line2Text = "last: $last | auto-stop $autoStop | VOL-DOWN STOP",
-            isError = false
-        )
+    /** showDetail controls the second line - callers show it only briefly (a few
+     *  seconds) after a new step is captured, so the pill is a single line the rest
+     *  of the time it's recording. */
+    fun showRecording(stepCount: Int, lastStepLabel: String?, autoStopSecondsRemaining: Long, showDetail: Boolean) {
+        val detail = if (showDetail) {
+            val minutes = autoStopSecondsRemaining / 60
+            val seconds = autoStopSecondsRemaining % 60
+            val autoStop = String.format(Locale.US, "%d:%02d", minutes, seconds)
+            val last = lastStepLabel ?: "(unlabeled)"
+            "last: $last | auto-stop $autoStop | VOL-DOWN STOP"
+        } else {
+            null
+        }
+        render(line1Text = "REC - $stepCount steps", line2Text = detail, isError = false)
     }
 
     fun showStopped(stepCount: Int) {
@@ -80,6 +84,10 @@ class StatusPill(private val service: AccessibilityService) {
      *  RecordingAccessibilityService and RecorderBridge. */
     fun hide() {
         mainHandler.removeCallbacksAndMessages(null)
+        // Safety: the pill must end up fully visible or fully removed, never stuck
+        // invisible - force both back to normal before tearing the window down.
+        rootView?.alpha = 1f
+        rootView?.visibility = View.VISIBLE
         rootView?.let { view -> runCatching { windowManager?.removeView(view) } }
         rootView = null
         line1 = null
@@ -89,6 +97,10 @@ class StatusPill(private val service: AccessibilityService) {
 
     private fun render(line1Text: String, line2Text: String?, isError: Boolean) {
         ensureAdded()
+        // Same invariant as hide(): whenever we're showing content, it must actually
+        // be visible, regardless of anything that may have faded it out before.
+        rootView?.alpha = 1f
+        rootView?.visibility = View.VISIBLE
         val color = if (isError) ERROR_RED else ELECTRIC_GREEN
         line1?.text = line1Text
         line1?.setTextColor(color)
@@ -110,19 +122,24 @@ class StatusPill(private val service: AccessibilityService) {
             setColor(ELECTRIC_GREEN)
         }
         dot = dotDrawable
-        val dotView = View(service).apply { background = dotDrawable }
+        val dotView = View(service).apply {
+            background = dotDrawable
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        }
 
         val sMark = TextView(service).apply {
             text = "S"
             setTextColor(ELECTRIC_GREEN)
             typeface = Typeface.DEFAULT_BOLD
             textSize = 14f
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         }
 
         val textLine1 = TextView(service).apply {
             setTextColor(ELECTRIC_GREEN)
             typeface = Typeface.MONOSPACE
             textSize = 13f
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         }
         line1 = textLine1
 
@@ -131,11 +148,13 @@ class StatusPill(private val service: AccessibilityService) {
             typeface = Typeface.MONOSPACE
             textSize = 11f
             visibility = View.GONE
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         }
         line2 = textLine2
 
         val textStack = LinearLayout(service).apply {
             orientation = LinearLayout.VERTICAL
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             addView(textLine1)
             addView(textLine2)
         }
@@ -151,6 +170,7 @@ class StatusPill(private val service: AccessibilityService) {
             gravity = Gravity.CENTER_VERTICAL
             background = pillDrawable
             setPadding(dp(14), dp(8), dp(14), dp(8))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
 
             addView(
                 sMark,
@@ -178,6 +198,13 @@ class StatusPill(private val service: AccessibilityService) {
         val glow = FrameLayout(service).apply {
             background = glowDrawable
             setPadding(dp(6), dp(6), dp(6), dp(6))
+            // Primary fix for the touch-exploration hit-test problem: a window with no
+            // accessibility content anywhere in it gets skipped when touch exploration
+            // decides what's at a given point, so taps fall through to whatever's
+            // actually underneath instead of landing on this overlay. NO_HIDE_DESCENDANTS
+            // on the root already covers the whole subtree; it's set on each child too
+            // for clarity and so it survives any future restructuring of this hierarchy.
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             addView(pill)
         }
 

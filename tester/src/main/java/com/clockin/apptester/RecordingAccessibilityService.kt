@@ -22,7 +22,6 @@ class RecordingAccessibilityService : AccessibilityService() {
 
     private var countdownJob: Job? = null
     private var pendingTouchExplorationToggle: Job? = null
-    private var recordingWatchdog: Job? = null
     private var recordingStatusTicker: Job? = null
 
     override fun onServiceConnected() {
@@ -126,29 +125,54 @@ class RecordingAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Keeps the pill's "REC - N steps" line live while RecorderMode.RECORDING: step
-     * count, the most recently captured step's label, and time left before the watchdog
-     * (reads RECORDING_WATCHDOG_TIMEOUT_MS below purely for display - the watchdog's own
-     * timing in setTouchExplorationRequested is untouched) auto-stops things. Exits on
-     * its own once mode leaves RECORDING; whichever stop path triggered that is
-     * responsible for what the pill shows afterwards.
+     * Keeps the pill's "REC - N steps" line live while RecorderMode.RECORDING, and owns
+     * the recording watchdog: an inactivity timer that resets to a fresh
+     * RECORDING_INACTIVITY_TIMEOUT_MS every time a new step is captured, force-stopping
+     * only once that much time passes with nothing captured - plus a hard cap that
+     * force-stops RECORDING_HARD_CAP_MS after recording started no matter what. Both
+     * read RecorderBridge.recordedSteps - the same read-only access the pill display
+     * already used - rather than hooking into capture logic itself. The pill's
+     * auto-stop line shows whichever limit is closer and jumps back up whenever a step
+     * resets the inactivity timer. The force-stop path is unchanged from the old flat
+     * watchdog: statusPill.hide() (no "STOPPED" message, the pill just comes down) then
+     * RecorderBridge.stopRecording() (same touch-exploration-off path volume-down and
+     * the button use). Exits on its own once mode leaves RECORDING for any other
+     * reason; whichever stop path triggered that is responsible for what the pill
+     * shows afterwards.
      */
     internal fun startRecordingStatusTicker() {
         recordingStatusTicker?.cancel()
         val startedAtMs = System.currentTimeMillis()
         var lastStepCount = -1
-        var lastCapturedAtMs = 0L
+        var lastCapturedAtMs = startedAtMs
         recordingStatusTicker = scope.launch {
             while (RecorderBridge.mode.value == RecorderMode.RECORDING) {
                 val now = System.currentTimeMillis()
-                val elapsedSeconds = (now - startedAtMs) / 1000
-                val remainingSeconds =
-                    (RECORDING_WATCHDOG_TIMEOUT_MS / 1000 - elapsedSeconds).coerceAtLeast(0)
                 val steps = RecorderBridge.recordedSteps.value
                 if (steps.size != lastStepCount) {
                     lastStepCount = steps.size
                     lastCapturedAtMs = now
                 }
+
+                val inactivityRemainingMs =
+                    (RECORDING_INACTIVITY_TIMEOUT_MS - (now - lastCapturedAtMs)).coerceAtLeast(0)
+                val hardCapRemainingMs =
+                    (RECORDING_HARD_CAP_MS - (now - startedAtMs)).coerceAtLeast(0)
+
+                if (inactivityRemainingMs <= 0 || hardCapRemainingMs <= 0) {
+                    val reason = if (hardCapRemainingMs <= 0) {
+                        "hard cap of ${RECORDING_HARD_CAP_MS / 60_000}min reached"
+                    } else {
+                        "no step captured for ${RECORDING_INACTIVITY_TIMEOUT_MS / 1000}s"
+                    }
+                    RecorderBridge.appendLog("Recording watchdog: $reason - forcing stop.")
+                    statusPill.hide()
+                    RecorderBridge.stopRecording()
+                    recordingStatusTicker = null
+                    return@launch
+                }
+
+                val remainingSeconds = minOf(inactivityRemainingMs, hardCapRemainingMs) / 1000
                 val showDetail = now - lastCapturedAtMs < STEP_DETAIL_VISIBLE_MS
                 statusPill.showRecording(steps.size, steps.lastOrNull()?.displayLabel(), remainingSeconds, showDetail)
                 delay(1000L)
@@ -174,10 +198,10 @@ class RecordingAccessibilityService : AccessibilityService() {
      * Any previously scheduled toggle is cancelled first so a quick Start-then-Stop tap can't
      * land the two flag changes out of order.
      *
-     * Turning it on also arms a 60s watchdog that force-stops recording regardless of UI
-     * state - a second safety net alongside volume-down, for cases where neither the
-     * touchscreen nor the hardware key path is usable. Turning it off (by button, volume
-     * key, or the watchdog itself) disarms any pending watchdog so it can't double-fire.
+     * The recording watchdog used to be armed/disarmed here too; it now lives in
+     * startRecordingStatusTicker, which already polls the same step list once a second
+     * for the pill display and needs the identical "time since last step" tracking the
+     * watchdog's inactivity timer needs - see that function.
      */
     fun setTouchExplorationRequested(requested: Boolean) {
         pendingTouchExplorationToggle?.cancel()
@@ -190,22 +214,6 @@ class RecordingAccessibilityService : AccessibilityService() {
                 info.flags and AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE.inv()
             }
             serviceInfo = info
-        }
-
-        recordingWatchdog?.cancel()
-        recordingWatchdog = if (requested) {
-            scope.launch {
-                delay(RECORDING_WATCHDOG_TIMEOUT_MS)
-                recordingWatchdog = null
-                RecorderBridge.appendLog(
-                    "Recording watchdog: no stop received after " +
-                        "${RECORDING_WATCHDOG_TIMEOUT_MS / 1000}s - forcing stop."
-                )
-                statusPill.hide()
-                RecorderBridge.stopRecording()
-            }
-        } else {
-            null
         }
     }
 
@@ -279,9 +287,13 @@ class RecordingAccessibilityService : AccessibilityService() {
         // input mode before the touch-exploration flag switches - see setTouchExplorationRequested.
         private const val TOUCH_EXPLORATION_TOGGLE_DELAY_MS = 300L
 
-        // Safety net: auto-stop recording (and touch exploration with it) if nothing
-        // else stopped it within a minute - see setTouchExplorationRequested.
-        private const val RECORDING_WATCHDOG_TIMEOUT_MS = 60_000L
+        // Watchdog: force-stop recording after this long with no new step captured -
+        // resets on every captured step. See startRecordingStatusTicker.
+        private const val RECORDING_INACTIVITY_TIMEOUT_MS = 90_000L
+
+        // Watchdog hard cap: force-stop recording this long after it started, no matter
+        // what, regardless of activity. See startRecordingStatusTicker.
+        private const val RECORDING_HARD_CAP_MS = 5 * 60_000L
 
         // Pre-recording window before touch exploration turns on - see beginRecordingCountdown.
         private const val RECORDING_COUNTDOWN_SECONDS = 7

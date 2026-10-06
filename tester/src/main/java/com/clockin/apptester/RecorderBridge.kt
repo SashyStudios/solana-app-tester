@@ -39,6 +39,12 @@ object RecorderBridge {
     private val _savedFlows = MutableStateFlow<List<SavedFlow>>(emptyList())
     val savedFlows: StateFlow<List<SavedFlow>> = _savedFlows.asStateFlow()
 
+    // Which saved flow (by SavedFlow.id) is currently loaded into _recordedSteps, if any -
+    // needed now that several flows can share a packageName, so "active" can no longer be
+    // derived from packageName alone the way it could with one flow per app.
+    private val _activeFlowId = MutableStateFlow<String?>(null)
+    val activeFlowId: StateFlow<String?> = _activeFlowId.asStateFlow()
+
     internal fun attachService(instance: RecordingAccessibilityService) {
         service = instance
         _isServiceConnected.value = true
@@ -90,6 +96,9 @@ object RecorderBridge {
             return
         }
         _recordedSteps.value = emptyList()
+        // A new, not-yet-saved recording doesn't correspond to any existing saved flow -
+        // clear which one was highlighted so nothing stale stays marked active.
+        _activeFlowId.value = null
         svc.clearLabelCache()
         _mode.value = RecorderMode.COUNTDOWN
         svc.beginRecordingCountdown()
@@ -119,14 +128,17 @@ object RecorderBridge {
 
         // Save-on-stop: every stop path (button, volume-down, watchdog) funnels through
         // here, so this one hook covers all three. Only when there's something to save -
-        // doesn't touch anything else in this function.
+        // doesn't touch anything else in this function. Always a new file, never a
+        // replace - see SavedFlowStore.save. The new flow becomes active; every flow
+        // already in the list is left exactly as it was.
         val steps = _recordedSteps.value
         val svc = service
         if (steps.isNotEmpty() && svc != null) {
             val targetPackage = SavedFlowStore.determineTargetPackage(svc, steps)
             if (targetPackage != null) {
-                svc.saveFlow(targetPackage, steps)
+                val saved = svc.saveFlow(targetPackage, steps)
                 _savedFlows.value = SavedFlowStore.loadAll(svc)
+                if (saved != null) _activeFlowId.value = saved.id
             } else {
                 appendLog("Couldn't determine which app this recording was for - not saved.")
             }
@@ -140,26 +152,27 @@ object RecorderBridge {
         _savedFlows.value = SavedFlowStore.loadAll(context)
     }
 
-    /** Loads a saved flow's steps as the current in-memory recording. There's no separate
-     *  "active flow" field - the active flow is simply whichever saved flow's packageName
-     *  matches recordedSteps.value's packageName, derived in the UI rather than tracked
-     *  twice. Clears the replay log too, so an old flow's results can't be mistaken for
+    /** Loads a saved flow's steps as the current in-memory recording and marks it active
+     *  by id. Clears the replay log too, so an old flow's results can't be mistaken for
      *  this one's. Only while idle, so this can't clobber an in-progress recording or
      *  replay. */
     fun selectSavedFlow(flow: SavedFlow) {
         if (_mode.value != RecorderMode.IDLE) return
         _recordedSteps.value = flow.steps
         _replayLog.value = emptyList()
+        _activeFlowId.value = flow.id
     }
 
-    /** If the deleted flow was the active one, clears it from the current in-memory
-     *  recording too - otherwise the step list/replay button would keep referencing a
-     *  flow that no longer has a file backing it. */
+    /** Removes exactly this one flow's file - every other saved flow, including others
+     *  for the same app, is untouched. If the deleted flow was the active one, clears it
+     *  from the current in-memory recording too - otherwise the step list/replay button
+     *  would keep referencing a flow that no longer has a file backing it. */
     fun deleteSavedFlow(context: Context, flow: SavedFlow) {
-        SavedFlowStore.delete(context, flow.packageName)
-        _savedFlows.update { it.filterNot { f -> f.packageName == flow.packageName } }
-        if (_recordedSteps.value.firstOrNull()?.packageName == flow.packageName) {
+        SavedFlowStore.delete(context, flow)
+        _savedFlows.update { it.filterNot { f -> f.id == flow.id } }
+        if (_activeFlowId.value == flow.id) {
             _recordedSteps.value = emptyList()
+            _activeFlowId.value = null
         }
     }
 

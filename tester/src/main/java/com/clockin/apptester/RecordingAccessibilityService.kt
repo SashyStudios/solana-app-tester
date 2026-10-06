@@ -8,6 +8,7 @@ import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.clockin.apptester.model.RecordedStep
+import com.clockin.apptester.model.SavedFlow
 import com.clockin.apptester.model.SavedFlowStore
 import com.clockin.apptester.model.hasNoIdentity
 import com.clockin.apptester.model.primaryLabel
@@ -360,13 +361,14 @@ class RecordingAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Writes steps to internal storage as packageName's saved flow, overwriting any
-     *  existing file for it - see SavedFlowStore. Wrapped so a write failure (e.g. disk
-     *  full) is reported honestly via the replay log instead of crashing or failing
-     *  silently. */
-    internal fun saveFlow(packageName: String, steps: List<RecordedStep>) {
-        runCatching { SavedFlowStore.save(this, packageName, steps) }
+    /** Writes steps to internal storage as a new saved flow for packageName - never
+     *  replaces an existing file, every recording gets its own - see SavedFlowStore.
+     *  Wrapped so a write failure (e.g. disk full) is reported honestly via the replay
+     *  log instead of crashing or failing silently; returns null in that case. */
+    internal fun saveFlow(packageName: String, steps: List<RecordedStep>): SavedFlow? {
+        return runCatching { SavedFlowStore.save(this, packageName, steps) }
             .onFailure { RecorderBridge.appendLog("Couldn't save flow for $packageName: ${it.message}") }
+            .getOrNull()
     }
 
     /** Re-finds each step's view in the current window and taps it, in order. */

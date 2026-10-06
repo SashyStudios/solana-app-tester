@@ -216,6 +216,12 @@ time is short.
   want to check" model. Bigger build (persistent Accessibility Service, a trigger
   mechanism for when to re-test, notifications, battery/permissions handling).
   Not v1.
+- **Modular flows (Josh)**: record each screen or section as its own module, then
+  chain modules into one full replay. Chaining requires each module to declare its
+  expected start screen and the tool to verify it before running, and requires
+  skipping the clean launch for modules after the first. Cheap first step: run
+  saved flows in sequence without a fresh launch between them. This builds on
+  multiple saved flows per app.
 
 ## Status and decisions as of Oct 4 (deadline Oct 8)
 
@@ -360,3 +366,17 @@ Where it shows, all using the same shared wording (`List<RecordedStep>.unlabeled
 One of these four touches a line inside `startRecordingStatusTicker()`, the function this file documents as owning the recording watchdog - flagging this explicitly since "don't touch the watchdog" was repeated as an instruction for this change. The edit is one line, changing only what string gets passed to `statusPill.showRecording()` for the last-step label; the watchdog's own timing and trigger logic (the inactivity reset, the hard cap, the force-stop branch, the loop's cadence) is byte-for-byte unchanged. Flagging it rather than deciding silently that "display text" was an acceptable reading of "don't touch."
 
 Capture logic, `findNode()`'s matching, the watchdog's timing/trigger logic, volume-down, and touch exploration are otherwise untouched; no MWA/SKR/transaction code touched.
+
+### Multiple saved flows per app (Oct 6, applied)
+Checked first (read-only) whether saved flows survive installs: every install this session used `adb install -r` (never an uninstall), and the app's data directory's own timestamp (Oct 2) predates this session, which an uninstall/reinstall would have reset - saved files have not been wiped by anything I've done.
+
+Changed per-app save from one overwritable file to one file per recording, so re-recording an app no longer loses the previous take:
+- `SavedFlowStore.save()` always creates a new file, `flow_<packageName>_<savedAtEpochMillis>.json` - never replaces an existing one, regardless of how many already exist for that package. Nothing is ever auto-deleted; only an explicit, confirmed per-row delete removes a file.
+- `SavedFlow` gained `id` (`"<packageName>_<savedAtEpochMillis>"`, derived from JSON content) and `fileName` (the actual file it came from). `loadAll()` doesn't care what a file is named, only what's inside it - a file saved under the old one-file-per-package naming (`flow_<packageName>.json`, from before this change) still loads correctly, it just never gets written again going forward. `fileName` is what `delete()` actually removes, since several flows can now share a packageName and deleting by package name alone would be ambiguous/wrong.
+- "Active flow" is now a real field (`RecorderBridge.activeFlowId`, by `SavedFlow.id`) instead of being derived from a packageName match - with several flows per app, packageName alone no longer disambiguates which one is loaded. Starting a new recording clears it (an unsaved recording isn't any existing saved flow yet); saving one at the end of `stopRecording()` sets it to the newly-created flow; selecting a row sets it to that row; deleting the active row clears both it and the in-memory step list. Every other saved flow is left exactly as it was by all of these.
+- **List UI**: grouped by app (one app's flows are never interleaved with another's), groups ordered by whichever app was most recently recorded, newest-first within each group. Each row reads `"<App name> #N | <step count> steps | <date time>"` - `#N` is that flow's ordinal within its own app's group, assigned oldest=1 upward by recording time, independent of the newest-first display order (`MainActivity.buildFlowDisplayList`).
+- **Copy Report fix**: the step list's post-tap hint (`"(shows '<text>' after tap)"`, from `postTapDetail()`) was only ever shown on-screen - a step with a post-tap `text`/`contentDescription` but no pre-tap label still reported as flatly "(unlabeled)" in Copy Report/Copy steps, even though the on-screen list showed more. `buildStepsReportText()` now appends the same hint, so both surfaces say the same thing about the same step.
+
+Needs an on-device pass: record the same app twice, confirm both takes show up as separate rows (not one overwriting the other), confirm the ordinal/grouping/newest-first ordering look right with 2+ apps and 2+ takes each, confirm delete only removes the one row tapped, and confirm a step with post-tap-only text no longer shows as bare "(unlabeled)" in Copy Report.
+
+Capture logic, `findNode()`'s matching, the watchdog, volume-down, touch exploration, the status pill, and all MWA/SKR/transaction code are untouched.

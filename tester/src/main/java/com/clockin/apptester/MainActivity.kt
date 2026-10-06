@@ -98,9 +98,31 @@ private fun buildStepsReportText(steps: List<RecordedStep>): String =
     } else {
         steps.mapIndexed { index, step ->
             val warning = if (step.hasNoIdentity()) "⚠ " else ""
-            "${index + 1}. $warning${step.primaryLabel()} | ${step.packageName}"
+            val postTap = step.postTapDetail()
+            val suffix = if (postTap != null) " (shows \"$postTap\" after tap)" else ""
+            "${index + 1}. $warning${step.primaryLabel()} | ${step.packageName}$suffix"
         }.joinToString("\n")
     }
+
+/** One saved flow plus its display ordinal within its own app's group - #1 is that app's
+ *  oldest flow, increasing with each later recording, independent of how the list is
+ *  sorted for display. */
+private data class DisplayFlow(val flow: SavedFlow, val ordinal: Int)
+
+/** Groups saved flows by app (so one app's flows are never interleaved with another's),
+ *  orders the groups by whichever app was most recently recorded, and within each group
+ *  shows newest first - "every flow, newest first, grouped by app." */
+private fun buildFlowDisplayList(savedFlows: List<SavedFlow>): List<DisplayFlow> {
+    val byPackage = savedFlows.groupBy { it.packageName }
+    val groupOrder = byPackage.values.sortedByDescending { flows -> flows.maxOf { it.savedAtEpochMillis } }
+    return groupOrder.flatMap { flows ->
+        val ordinalById = flows.sortedBy { it.savedAtEpochMillis }
+            .withIndex()
+            .associate { (i, f) -> f.id to (i + 1) }
+        flows.sortedByDescending { it.savedAtEpochMillis }
+            .map { f -> DisplayFlow(f, ordinalById.getValue(f.id)) }
+    }
+}
 
 /** Full plain-text report for "Copy report": header (target app, date/time, Android
  *  version), the recorded steps, and the full replay log - same data already on screen,
@@ -133,9 +155,10 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
     val log by RecorderBridge.replayLog.collectAsState()
     val countdown by RecorderBridge.countdownSecondsRemaining.collectAsState()
     val savedFlows by RecorderBridge.savedFlows.collectAsState()
+    val activeFlowId by RecorderBridge.activeFlowId.collectAsState()
     var flowPendingDelete by remember { mutableStateOf<SavedFlow?>(null) }
 
-    val activePackage = steps.firstOrNull()?.packageName
+    val displayFlows = remember(savedFlows) { buildFlowDisplayList(savedFlows) }
 
     Column(
         modifier = Modifier
@@ -200,17 +223,18 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
             fontWeight = FontWeight.Bold,
             color = SashyColors.White
         )
-        if (savedFlows.isEmpty()) {
+        if (displayFlows.isEmpty()) {
             Text("No saved flows yet", color = SashyColors.DimWhite)
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                savedFlows.forEach { flow ->
+                displayFlows.forEach { display ->
                     SavedFlowRow(
-                        flow = flow,
-                        isActive = flow.packageName == activePackage,
+                        flow = display.flow,
+                        ordinal = display.ordinal,
+                        isActive = display.flow.id == activeFlowId,
                         enabled = mode == RecorderMode.IDLE,
-                        onSelect = { RecorderBridge.selectSavedFlow(flow) },
-                        onDeleteRequested = { flowPendingDelete = flow }
+                        onSelect = { RecorderBridge.selectSavedFlow(display.flow) },
+                        onDeleteRequested = { flowPendingDelete = display.flow }
                     )
                 }
             }
@@ -373,13 +397,16 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
     }
 }
 
-/** One row per saved flow - app name (falls back to the raw package name if
- *  PackageManager can't resolve a label, e.g. the app was uninstalled since saving),
- *  step count, saved time. Tapping it makes it the active flow (green highlight);
- *  "Delete" asks for confirmation before removing anything. */
+/** One row per saved flow - "<App name> #N | <step count> steps | <date time>", where
+ *  #N is this flow's ordinal within its own app's group (see buildFlowDisplayList), and
+ *  app name falls back to the raw package name if PackageManager can't resolve a label
+ *  (e.g. the app was uninstalled since saving). Tapping it makes it the active flow
+ *  (green highlight); "Delete" asks for confirmation before removing anything - every
+ *  other flow, including other recordings of the same app, is left alone. */
 @Composable
 private fun SavedFlowRow(
     flow: SavedFlow,
+    ordinal: Int,
     isActive: Boolean,
     enabled: Boolean,
     onSelect: () -> Unit,
@@ -400,20 +427,13 @@ private fun SavedFlowRow(
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                appLabel,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                color = if (isActive) SashyColors.ElectricGreen else SashyColors.White
-            )
-            Text(
-                "${flow.steps.size} steps | saved $savedTime",
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = SashyColors.DimWhite
-            )
-        }
+        Text(
+            "$appLabel #$ordinal | ${flow.steps.size} steps | $savedTime",
+            modifier = Modifier.weight(1f),
+            fontFamily = FontFamily.Monospace,
+            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+            color = if (isActive) SashyColors.ElectricGreen else SashyColors.White
+        )
         TextButton(onClick = onDeleteRequested) {
             Text("Delete", color = SashyColors.ErrorRed)
         }

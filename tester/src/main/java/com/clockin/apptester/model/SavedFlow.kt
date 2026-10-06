@@ -6,18 +6,31 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-/** A saved recording for one target app. One of these per packageName, ever - see
- *  SavedFlowStore. */
+/**
+ * One saved recording. Multiple of these can exist for the same packageName - every
+ * recording that stops gets its own file, nothing is ever overwritten. id is a stable
+ * identity ("packageName_savedAtEpochMillis") derived from JSON content rather than the
+ * filename, so it means the same thing whether the backing file uses the new per-recording
+ * naming or the old one-file-per-package naming (see SavedFlowStore). fileName is the
+ * actual file on disk this flow was loaded from/written to - needed by delete(), otherwise
+ * opaque to callers.
+ */
 data class SavedFlow(
+    val id: String,
     val packageName: String,
     val steps: List<RecordedStep>,
-    val savedAtEpochMillis: Long
+    val savedAtEpochMillis: Long,
+    val fileName: String
 )
 
 /**
- * Persists recordings as one JSON file per target package in the tester's own internal
- * storage (filesDir) - no database, no cloud, no multiple flows per app. Re-recording the
- * same app overwrites its file. formatVersion is written into every file so a future
+ * Persists recordings as JSON files in the tester's own internal storage (filesDir) - no
+ * database, no cloud. Every recording that stops with at least one step becomes its own
+ * file (flow_<packageName>_<savedAtEpochMillis>.json) and nothing already on disk is ever
+ * replaced or auto-deleted - only an explicit per-flow delete() removes a file. A file
+ * written under the old one-file-per-package naming (flow_<packageName>.json, from before
+ * multiple flows per app existed) still loads - loadAll() doesn't care what a file is
+ * named, only what's inside it. formatVersion is written into every file so a future
  * format change can still tell an old file apart from a new one and migrate/reject it
  * deliberately instead of guessing.
  */
@@ -26,15 +39,20 @@ object SavedFlowStore {
     private const val FILE_PREFIX = "flow_"
     private const val FILE_SUFFIX = ".json"
 
-    fun save(context: Context, packageName: String, steps: List<RecordedStep>) {
+    /** Always creates a new file - never overwrites an existing one, regardless of how
+     *  many flows already exist for this packageName. */
+    fun save(context: Context, packageName: String, steps: List<RecordedStep>): SavedFlow {
+        val savedAt = System.currentTimeMillis()
+        val fileName = "$FILE_PREFIX${packageName}_$savedAt$FILE_SUFFIX"
         val root = JSONObject()
         root.put("formatVersion", FORMAT_VERSION)
         root.put("packageName", packageName)
-        root.put("savedAtEpochMillis", System.currentTimeMillis())
+        root.put("savedAtEpochMillis", savedAt)
         val stepsArray = JSONArray()
         steps.forEach { stepsArray.put(it.toJson()) }
         root.put("steps", stepsArray)
-        file(context, packageName).writeText(root.toString())
+        File(context.filesDir, fileName).writeText(root.toString())
+        return SavedFlow(id(packageName, savedAt), packageName, steps, savedAt, fileName)
     }
 
     /** Skips (rather than crashes on) any file that fails to parse - a corrupt or
@@ -43,12 +61,15 @@ object SavedFlowStore {
         val files = context.filesDir
             .listFiles { f -> f.name.startsWith(FILE_PREFIX) && f.name.endsWith(FILE_SUFFIX) }
             ?: emptyArray()
-        return files.mapNotNull { f -> runCatching { parse(f.readText()) }.getOrNull() }
+        return files.mapNotNull { f -> runCatching { parse(f.name, f.readText()) }.getOrNull() }
             .sortedByDescending { it.savedAtEpochMillis }
     }
 
-    fun delete(context: Context, packageName: String) {
-        file(context, packageName).delete()
+    /** Deletes exactly the file this flow was loaded from - not derived from packageName
+     *  alone, since several flows can share one. Never called except by an explicit,
+     *  user-confirmed per-row delete. */
+    fun delete(context: Context, flow: SavedFlow) {
+        File(context.filesDir, flow.fileName).delete()
     }
 
     /**
@@ -80,16 +101,15 @@ object SavedFlowStore {
         return context.packageManager.resolveActivity(homeIntent, 0)?.activityInfo?.packageName
     }
 
-    private fun file(context: Context, packageName: String): File =
-        File(context.filesDir, "$FILE_PREFIX$packageName$FILE_SUFFIX")
+    private fun id(packageName: String, savedAtEpochMillis: Long): String = "${packageName}_$savedAtEpochMillis"
 
-    private fun parse(text: String): SavedFlow {
+    private fun parse(fileName: String, text: String): SavedFlow {
         val root = JSONObject(text)
         val packageName = root.getString("packageName")
         val savedAt = root.optLong("savedAtEpochMillis", 0L)
         val stepsArray = root.optJSONArray("steps") ?: JSONArray()
         val steps = (0 until stepsArray.length()).map { i -> stepsArray.getJSONObject(i).toRecordedStep() }
-        return SavedFlow(packageName, steps, savedAt)
+        return SavedFlow(id(packageName, savedAt), packageName, steps, savedAt, fileName)
     }
 
     private fun RecordedStep.toJson(): JSONObject {

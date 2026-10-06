@@ -138,6 +138,7 @@ private fun buildFullReportText(steps: List<RecordedStep>, log: List<String>): S
         appendLine("App: $appPackage")
         appendLine("Date: $now")
         appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+        appendLine("Note: the tool reports differences it can observe on screen. It doesn't know what code changed.")
         appendLine()
         appendLine("-- Recorded steps (${steps.size}) --")
         appendLine(buildStepsReportText(steps))
@@ -256,17 +257,25 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
                         )
                     }
                     is ReplayResult.Failed -> {
+                        // explanation's own first line already reads "Step N/M FAILED:
+                        // expected ..., not found." - shown bold, the rest (rename
+                        // assessment, other on-screen elements) below it, same color.
+                        val lines = result.explanation.split("\n")
                         Text(
-                            "Step ${result.stepNumber} of ${result.totalSteps} failed",
+                            lines.firstOrNull() ?: "Step ${result.stepNumber} of ${result.totalSteps} failed",
                             fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
                             color = SashyColors.ErrorRed
                         )
-                        Text(
-                            result.explanation,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = SashyColors.ErrorRed
-                        )
+                        val rest = lines.drop(1).joinToString("\n")
+                        if (rest.isNotEmpty()) {
+                            Text(
+                                rest,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = SashyColors.ErrorRed
+                            )
+                        }
                     }
                 }
             }

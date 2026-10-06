@@ -510,18 +510,21 @@ class RecordingAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * "expected <name>, not found", up to MAX_ON_SCREEN_ELEMENTS clickable elements
-     * currently on screen, and a rename candidate assessment - the minimal break
-     * explanation from CLAUDE.md's "Break explanations" section. Observable differences
-     * only: this never claims to know what changed in the target app's code.
+     * Three lines (real line breaks), observable differences only - never claims to know
+     * what changed in the target app's code:
      *
-     * Candidates are computed over every on-screen element (not just the ones shown):
-     * same class as the failing step, and not "claimed" by any OTHER step already in
-     * this recording - by resourceId or by label - since an element some other step
-     * already expects is more likely to legitimately be that other control than a
-     * renamed version of this one. Zero candidates, one, or several are each reported
-     * differently so a developer never mistakes "several equally-likely candidates" for
-     * "found the one rename."
+     * Line 1: what was expected and that it wasn't found.
+     * Line 2: a rename assessment, ranked in two stages - first the same filter as before
+     * (same class as the failing step, not "claimed" by any OTHER step already in this
+     * recording, by resourceId or by label, since an element some other step already
+     * expects is more likely to legitimately be that other control than a renamed version
+     * of this one), then word overlap between each remaining candidate's label and every
+     * label this step itself ever had (pre-tap text/contentDescription, post-tap
+     * text/contentDescription) - case-insensitive, words under 3 characters ignored.
+     * Exactly one candidate with overlap is "Most likely"; several is "Candidates:"
+     * (only those with overlap, not the whole same-class pool); none is "No close match."
+     * Line 3: up to MAX_ALSO_ON_SCREEN_ELEMENTS other on-screen elements not already named
+     * in line 2, omitted entirely if there's nothing left to add.
      */
     private fun breakExplanation(
         steps: List<RecordedStep>,
@@ -532,33 +535,56 @@ class RecordingAccessibilityService : AccessibilityService() {
         val otherSteps = steps.filterIndexed { i, _ -> i != index }
         val claimedResourceIds = otherSteps.mapNotNull { it.resourceId }.toSet()
         val claimedLabels = otherSteps.map { it.primaryLabel() }.toSet()
-        val candidates = onScreen.filter { element ->
+        val classMatches = onScreen.filter { element ->
             element.className == step.className &&
                 (element.resourceId == null || element.resourceId !in claimedResourceIds) &&
                 element.label !in claimedLabels
         }
-        return buildString {
-            append("Step ${index + 1}/${steps.size}: expected ${step.primaryLabel()}, not found.")
-            if (onScreen.isNotEmpty()) {
-                append(" On screen: ")
-                append(
-                    onScreen.take(MAX_ON_SCREEN_ELEMENTS)
-                        .joinToString("; ") { "${it.resourceId ?: "(no id)"} '${it.label}'" }
-                )
-            }
-            when (candidates.size) {
-                0 -> append(" No likely rename candidate found among on-screen elements.")
-                1 -> {
-                    val only = candidates.single()
-                    append(" Possibly renamed: ${only.resourceId ?: "(no id)"} '${only.label}'.")
-                }
-                else -> {
-                    append(" Candidates: ")
-                    append(candidates.joinToString("; ") { "${it.resourceId ?: "(no id)"} '${it.label}'" })
-                }
-            }
+
+        // Every label this step itself ever had - not just primaryLabel() - so overlap
+        // can be found against the pre-tap label, the post-tap label, or either's
+        // contentDescription, whichever actually shares a word with what's on screen now.
+        val recordedWords = listOfNotNull(step.preTapText, step.preTapContentDescription, step.text, step.contentDescription)
+            .flatMap { wordsOf(it) }
+            .toSet()
+        val withOverlap: List<Pair<ClickableElement, String>> = classMatches.mapNotNull { element ->
+            wordsOf(element.label).firstOrNull { it in recordedWords }?.let { word -> element to word }
         }
+
+        val line1 = "Step ${index + 1}/${steps.size} FAILED: expected ${step.resourceId ?: "(no id)"} " +
+            "(recorded as '${step.primaryLabel()}'), not found."
+
+        val namedInLine2 = mutableSetOf<ClickableElement>()
+        val line2 = when {
+            withOverlap.size == 1 -> {
+                val (element, word) = withOverlap.single()
+                namedInLine2.add(element)
+                "Most likely: ${element.resourceId ?: "(no id)"} '${element.label}' " +
+                    "(shares '$word' with the recorded label)"
+            }
+            withOverlap.size > 1 -> {
+                namedInLine2.addAll(withOverlap.map { it.first })
+                "Candidates: " + withOverlap.joinToString("; ") { (element, _) ->
+                    "${element.resourceId ?: "(no id)"} '${element.label}'"
+                }
+            }
+            else -> "No close match. ${onScreen.size} other elements are on screen."
+        }
+
+        val remaining = onScreen.filterNot { it in namedInLine2 }.take(MAX_ALSO_ON_SCREEN_ELEMENTS)
+        val line3 = if (remaining.isNotEmpty()) {
+            "Also on screen: " + remaining.joinToString("; ") { "${it.resourceId ?: "(no id)"} '${it.label}'" }
+        } else {
+            null
+        }
+
+        return listOfNotNull(line1, line2, line3).joinToString("\n")
     }
+
+    /** Lowercased, split on anything that isn't a letter/digit, words under 3 characters
+     *  dropped - used only for the break explanation's word-overlap ranking. */
+    private fun wordsOf(text: String): List<String> =
+        text.lowercase().split(Regex("[^a-z0-9]+")).filter { it.length >= 3 }
 
     private fun listClickableElements(root: AccessibilityNodeInfo): List<ClickableElement> {
         val found = mutableListOf<ClickableElement>()
@@ -628,9 +654,10 @@ class RecordingAccessibilityService : AccessibilityService() {
         private const val NODE_SEARCH_TIMEOUT_MS = 3000L
         private const val NODE_SEARCH_POLL_INTERVAL_MS = 300L
 
-        // Cap on how many on-screen clickable elements a break explanation's "On screen:"
-        // line lists - the candidate search itself is uncapped, see collectClickableElements.
-        private const val MAX_ON_SCREEN_ELEMENTS = 8
+        // Cap on how many on-screen clickable elements a break explanation's "Also on
+        // screen:" line lists - the candidate search itself is uncapped, see
+        // collectClickableElements.
+        private const val MAX_ALSO_ON_SCREEN_ELEMENTS = 5
 
         // Gives the current tap's touch-up event time to finish resolving under the old
         // input mode before the touch-exploration flag switches - see setTouchExplorationRequested.

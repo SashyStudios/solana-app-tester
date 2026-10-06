@@ -2,6 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
+        Needed by the Solana RPC client in the signing stage. The MWA wallet handshake itself
+        is a local socket association and doesn't need it, but it's declared here with the
+        dependencies rather than left to be discovered as a confusing failure later.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
         Android 11+ package visibility: without this, PackageManager.getLaunchIntentForPackage
         returns null for another app even when it's installed, which replay() can't tell apart
         from "not installed" - see the Oct 4 investigation. The MAIN/LAUNCHER intent query

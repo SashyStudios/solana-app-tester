@@ -400,3 +400,85 @@ Two changes to break-explanation only - `findNode()`'s matching logic itself is 
 - **"Last result" card**: sits above the saved-flows list, hidden until a replay has ever run. Green "Replay passed: N of N steps (\<app\> #K)" or red "Step N of M failed" plus the same explanation line already going to the replay log. `RecorderBridge.lastResult` (a new `ReplayResult` - `Passed`/`Failed`) is set once at the end of `replay()`, reusing the explanation string already computed for the log rather than recomputing it. The "(\<app\> #K)" part isn't stored in the result - it's resolved in the UI from `activeFlowId` against the current saved-flows list, the same way the list's own green-highlight already works, so it reflects whichever flow is *currently* marked active rather than a snapshot frozen at replay time. Stays showing the latest result until a later replay overwrites it; nothing clears it early. Sashy styling (`CardBlack`/`BorderGray`/monospace), page and box scrolling unchanged from the prior fix above.
 
 Needs an on-device pass: trigger a break with several equally-valid same-class elements on screen and confirm "Candidates:" lists more than one; confirm a clean replay's card reads "Replay passed: N of N steps (\<app\> #K)" with the right app/ordinal; confirm a failed replay's card matches what's in the replay log.
+
+### MWA Stage 1: wallet connect only (Oct 6, applied - not yet verified on-device)
+The tester itself is now an MWA dapp, not just a recorder of one. Connect/disconnect against
+devnet only; **no transactions, no signing, no RPC calls in this stage**.
+
+- **Dependencies**: `tester/build.gradle` gained the same five the demo app uses, same
+  versions - `mobile-wallet-adapter-clientlib-ktx:2.2.0`, `rpc-core`/`rpc-solana`/
+  `rpc-ktordriver:0.2.11`, `bitcoinj-core:0.17.1` (Base58). The three `rpc-*` artifacts are
+  deliberately unused in Stage 1 and are there for the signing stage.
+- **`INTERNET` permission added** to the tester manifest. It had none - the demo app does.
+  Not needed for the MWA handshake itself (that's a local socket association), but the RPC
+  client in the signing stage will fail without it, and discovering that later as a vague
+  network error is worse than declaring it now. Verified present in the merged manifest.
+- **`solana/DevnetConfig.kt`** (new): `RPC_URL`, `CLUSTER = Solana.Devnet`, `CLUSTER_LABEL`,
+  and `requireDevnet(blockchain)` which **throws** on anything but `solana:devnet`. It
+  compares `fullName` rather than object identity so a `Blockchain` built another way can't
+  slip through. Called at the top of every wallet request, so it's enforcement, not a
+  comment. Also `EXPECTED_TEST_WALLET` (currently
+  `4BAHsk1dFpKmp1kuZyK8ziSsTgpqgjtGqXwK3Ppb8wF2`); an empty string disables the check.
+- **`solana/WalletConnector.kt`** (new): a `MobileWalletAdapter` with
+  `ConnectionIdentity(identityName = "Solana App Tester", identityUri =
+  "https://clockin.hackathon/tester")` - deliberately distinct from the demo app's "MWA Test
+  Target App"/`https://clockin.hackathon`, since both will appear separately in a wallet's
+  authorization list and confusing the two mid-demo would be easy. Exposes
+  `connection`/`requestInProgress`/`message` as `StateFlow`s, mirroring `RecorderBridge`'s
+  shape. `connect()` returns the account's Base58 address plus the wallet's `accountLabel`
+  (null when the wallet gives none - never invented). `disconnect()` calls the library's
+  `disconnect`, which does the real `deauthorize` RPC, then clears `authToken` and local
+  state in a `finally` either way: if the deauthorize failed the wallet may still hold the
+  authorization, so the failure is reported truthfully while this app stops claiming to be
+  connected. **Nothing retries automatically** - a failed or cancelled request ends and waits
+  for a deliberate second tap, because an auto-retry would re-prompt the wallet for an
+  approval nobody asked for twice.
+- **Four distinct outcomes, each with its own message.** Timeout is a 30s
+  `withTimeoutOrNull` wrapper (the library's own internal limits are 20s send-intent / 10s
+  connect, so this is an outer backstop) and reads exactly: "No response from the wallet. If
+  you use Phantom, check that Testnet Mode is set to Solana Devnet." No-wallet is the
+  library's `NoWalletFound`. Cancel is only *claimed* when the underlying message actually
+  indicates one - verified from the clientlib 2.2.0 sources, a cancel arrives as
+  `RESULT_CANCELED` -> "Request was interrupted", or as the protocol's `ERROR_NOT_SIGNED` ->
+  "User did not authorize signing". Anything else is passed through verbatim as "Wallet
+  request failed: <raw>" rather than guessed at, so a real failure is never mislabelled as a
+  deliberate cancel. `WalletMessage` carries an `isError` flag so a timeout can't render as
+  quiet grey status text beside a success.
+- **UI**: a "Wallet (devnet)" card sits between the Record button and the "Last result"
+  card - Record stays the prominent primary action, and the card is still visible without
+  scrolling (it needs to be, for demo video/screenshots). Purple `DEVNET` badge, full
+  untruncated monospace address (a partial key is useless for checking which wallet you're
+  on), wallet label line, Connect/Disconnect, and the red bordered banner "Not the configured
+  test wallet. Disconnect before doing anything else." when `EXPECTED_TEST_WALLET` is set and
+  the connected address differs. The banner warns and does not block - only the person
+  holding the phone can tell a wrong-wallet mistake from a deliberate second test wallet.
+- **Brand judgement call to review**: the Connect button and the badge use Solana purple
+  `#9945FF`. The brand rule reserves purple for "SKR/crypto-specific actions" but then says
+  it "applies specifically to the SKR devnet transaction buttons." A wallet connect is a
+  crypto action but not a transaction, so this is a reading, not a given - easy to switch to
+  Electric Green if that's wrong.
+- **Mutual gating**: Record and Replay are disabled while `requestInProgress` is true (a
+  wallet window is foreground then), and Connect is enabled only when recorder mode is
+  `IDLE`. The accessibility service plays no part in this card and is never asked to touch a
+  wallet window. The tester does not auto-tap or auto-approve anything in a wallet, by
+  design and by absence of any code that could.
+- **`ActivityResultSender`** is built in `MainActivity.onCreate` before `setContent`, as it
+  must be (it registers an activity-result launcher, only legal pre-RESUMED), and passed into
+  `TesterScreen`.
+
+Capture logic, `findNode()`'s matching, the watchdog, volume-down, touch exploration, the
+status pill, the saved-flows code, and the demo app are all untouched.
+
+Build: `./gradlew :tester:assembleDebug` succeeds (needs
+`JAVA_HOME="/c/Program Files/Android/Android Studio/jbr"` from the shell). No new warnings -
+the only ones are pre-existing `AccessibilityNodeInfo.recycle()` and `LocalClipboardManager`
+deprecations. Installed with `adb install -r`; the service was not started and nothing was
+tapped.
+
+Needs an on-device pass: tap Connect and confirm which of the three installed MWA wallets
+actually honours `solana:devnet` (`com.solanamobile.wallet` 1.17.0 /
+`ag.jup.jupiter.android` / `app.phantom` 26.6.0 - Solflare is not installed); confirm the
+address and label render correctly; confirm Disconnect deauthorizes; confirm the 30s timeout
+message appears if Phantom is left on mainnet (its documented Android behaviour there is to
+show nothing at all rather than return an error); and confirm the wrong-wallet banner fires
+with a non-configured wallet.

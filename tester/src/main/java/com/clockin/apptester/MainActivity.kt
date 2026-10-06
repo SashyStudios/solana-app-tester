@@ -40,6 +40,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,16 +59,28 @@ import com.clockin.apptester.model.hasNoIdentity
 import com.clockin.apptester.model.postTapDetail
 import com.clockin.apptester.model.primaryLabel
 import com.clockin.apptester.model.unlabeledStepWarning
+import com.clockin.apptester.solana.DevnetConfig
+import com.clockin.apptester.solana.WalletConnection
+import com.clockin.apptester.solana.WalletConnector
+import com.clockin.apptester.solana.WalletMessage
 import com.clockin.apptester.ui.theme.SashyColors
 import com.clockin.apptester.ui.theme.SashyTheme
+import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
+    /** Must be constructed in onCreate, before the activity is resumed - it registers an
+     *  activity-result launcher, which Android only allows before that point. */
+    private lateinit var activityResultSender: ActivityResultSender
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        activityResultSender = ActivityResultSender(this)
         // Pure file I/O via Context - independent of whether the accessibility service
         // is connected yet (enabling it is a separate manual step in Settings).
         RecorderBridge.loadSavedFlows(this)
@@ -75,6 +88,7 @@ class MainActivity : ComponentActivity() {
             SashyTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = SashyColors.StudioBlack) {
                     TesterScreen(
+                        sender = activityResultSender,
                         onOpenAccessibilitySettings = {
                             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                         }
@@ -161,9 +175,10 @@ private fun buildFullReportText(steps: List<RecordedStep>, log: List<String>, fl
 }
 
 @Composable
-private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
+private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettings: () -> Unit) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
     val serviceConnected by RecorderBridge.isServiceConnected.collectAsState()
     val mode by RecorderBridge.mode.collectAsState()
     val steps by RecorderBridge.recordedSteps.collectAsState()
@@ -172,6 +187,9 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
     val savedFlows by RecorderBridge.savedFlows.collectAsState()
     val activeFlowId by RecorderBridge.activeFlowId.collectAsState()
     val lastResult by RecorderBridge.lastResult.collectAsState()
+    val walletConnection by WalletConnector.connection.collectAsState()
+    val walletBusy by WalletConnector.requestInProgress.collectAsState()
+    val walletMessage by WalletConnector.message.collectAsState()
     var flowPendingDelete by remember { mutableStateOf<SavedFlow?>(null) }
     var flowPendingRename by remember { mutableStateOf<SavedFlow?>(null) }
 
@@ -230,7 +248,9 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
 
         Button(
             onClick = startButtonAction,
-            enabled = serviceConnected && mode != RecorderMode.REPLAYING,
+            // Also disabled while a wallet request is open: a wallet window is in the
+            // foreground then, and nothing else should start against it.
+            enabled = serviceConnected && mode != RecorderMode.REPLAYING && !walletBusy,
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(
@@ -242,6 +262,15 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
         ) {
             Text(startButtonLabel)
         }
+
+        WalletCard(
+            connection = walletConnection,
+            busy = walletBusy,
+            message = walletMessage,
+            connectEnabled = mode == RecorderMode.IDLE && !walletBusy,
+            onConnect = { scope.launch { WalletConnector.connect(sender) } },
+            onDisconnect = { scope.launch { WalletConnector.disconnect(sender) } }
+        )
 
         lastResult?.let { result ->
             Column(
@@ -398,7 +427,8 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
         ) {
             Button(
                 onClick = { RecorderBridge.startReplay() },
-                enabled = serviceConnected && mode == RecorderMode.IDLE && steps.isNotEmpty(),
+                enabled = serviceConnected && mode == RecorderMode.IDLE &&
+                    steps.isNotEmpty() && !walletBusy,
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -523,6 +553,139 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
             titleContentColor = SashyColors.White,
             textContentColor = SashyColors.DimWhite
         )
+    }
+}
+
+/**
+ * Stage 1 of the MWA feature: authorize against devnet and show what connected. No
+ * transactions, no signing - those come later. The cluster is on screen as a badge rather
+ * than implied, because "which network am I on" is the one thing nobody should have to
+ * infer from a wallet screen.
+ *
+ * Nothing here ever drives the wallet app itself: the person taps approve in the wallet by
+ * hand. The accessibility service is not involved in this card at all.
+ */
+@Composable
+private fun WalletCard(
+    connection: WalletConnection?,
+    busy: Boolean,
+    message: WalletMessage?,
+    connectEnabled: Boolean,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(SashyColors.CardBlack, RoundedCornerShape(12.dp))
+            .border(1.dp, SashyColors.BorderGray, RoundedCornerShape(12.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Wallet (devnet)",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = SashyColors.White
+            )
+            Text(
+                DevnetConfig.CLUSTER_LABEL,
+                modifier = Modifier
+                    .background(SashyColors.SolanaPurple, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = SashyColors.White
+            )
+        }
+
+        if (connection == null) {
+            Text(
+                if (busy) "Waiting for the wallet. Approve the request by hand."
+                else "Not connected.",
+                fontSize = 12.sp,
+                color = SashyColors.DimWhite
+            )
+        } else {
+            Text("Address", fontSize = 11.sp, color = SashyColors.DimWhite)
+            // Full address, never truncated - a partially shown key is useless for
+            // checking you're on the wallet you meant to be on.
+            Text(
+                connection.address,
+                modifier = Modifier.fillMaxWidth(),
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = SashyColors.ElectricGreen
+            )
+            Text(
+                connection.label?.let { "Wallet label: $it" } ?: "Wallet label: (none given)",
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = SashyColors.DimWhite
+            )
+            if (!DevnetConfig.isExpectedTestWallet(connection.address)) {
+                Text(
+                    "Not the configured test wallet. Disconnect before doing anything else.",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(SashyColors.PureBlack, RoundedCornerShape(8.dp))
+                        .border(1.dp, SashyColors.ErrorRed, RoundedCornerShape(8.dp))
+                        .padding(8.dp),
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = SashyColors.ErrorRed
+                )
+            }
+        }
+
+        message?.let {
+            Text(
+                it.text,
+                fontSize = 12.sp,
+                color = if (it.isError) SashyColors.ErrorRed else SashyColors.DimWhite
+            )
+        }
+
+        if (connection == null) {
+            Button(
+                onClick = onConnect,
+                enabled = connectEnabled,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    // Purple is the brand's Solana/crypto action colour - keeps this
+                    // visually distinct from the tool's own green Record/Replay actions.
+                    containerColor = SashyColors.SolanaPurple,
+                    contentColor = SashyColors.White,
+                    disabledContainerColor = SashyColors.BorderGray,
+                    disabledContentColor = SashyColors.DimWhite
+                )
+            ) {
+                Text("Connect wallet (devnet)")
+            }
+        } else {
+            Button(
+                onClick = onDisconnect,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SashyColors.BorderGray,
+                    contentColor = SashyColors.White,
+                    disabledContainerColor = SashyColors.BorderGray,
+                    disabledContentColor = SashyColors.DimWhite
+                )
+            ) {
+                Text("Disconnect")
+            }
+        }
     }
 }
 

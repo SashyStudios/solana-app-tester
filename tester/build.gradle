@@ -50,4 +50,16 @@ dependencies {
     implementation 'androidx.compose.ui:ui-tooling-preview'
     implementation 'androidx.compose.material3:material3'
     debugImplementation 'androidx.compose.ui:ui-tooling'
+
+    // Mobile Wallet Adapter + Solana transaction building/RPC, same versions the demo app
+    // uses (see app/build.gradle) so both modules behave identically against a wallet.
+    // Devnet only - see solana/DevnetConfig.kt, which enforces it rather than documenting it.
+    // Stage 1 is connect-only: the rpc-* artifacts are unused until the signing stage.
+    implementation 'com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.2.0'
+    implementation 'com.solanamobile:rpc-core:0.2.11'
+    implementation 'com.solanamobile:rpc-solana:0.2.11'
+    implementation 'com.solanamobile:rpc-ktordriver:0.2.11'
+
+    // Base58 encoding for displaying the connected wallet address.
+    implementation 'org.bitcoinj:bitcoinj-core:0.17.1'
 }

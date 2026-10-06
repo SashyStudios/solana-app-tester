@@ -107,6 +107,11 @@ object RecorderBridge {
             appendLog("Cannot start recording: accessibility service not connected.")
             return
         }
+        svc.recordingBlockReason()?.let { reason ->
+            appendLog("Recording not started: $reason")
+            svc.statusPill.showRecordingBlocked("RECORDING NOT STARTED", reason)
+            return
+        }
         _recordedSteps.value = emptyList()
         // A new, not-yet-saved recording doesn't correspond to any existing saved flow -
         // clear which one was highlighted so nothing stale stays marked active.
@@ -118,6 +123,14 @@ object RecorderBridge {
 
     /** Called by the service once the countdown reaches zero. */
     internal fun beginRecording() {
+        // The countdown exists so the person can switch to the target app - check again now
+        // that they have, since a wallet or the lock screen may be what's in front.
+        service?.recordingBlockReason()?.let { reason ->
+            _mode.value = RecorderMode.IDLE
+            appendLog("Recording not started: $reason")
+            service?.statusPill?.showRecordingBlocked("RECORDING NOT STARTED", reason)
+            return
+        }
         _mode.value = RecorderMode.RECORDING
         service?.startRecordingStatusTicker()
     }

@@ -44,6 +44,9 @@ It replaces the part where I re-tap the same flow by hand.
   click event a plain tap produces, so nothing gets captured.
 - An element with no resource ID and no text/label can't be matched
   reliably. The tester warns about these when they show up in a recording.
+- WebView content is untested. A web page inside an app reaches accessibility as
+  virtual nodes built from the page, not as Android views, so resource IDs may be
+  missing there and matching or clicking inside a WebView is unverified.
 - Replay performs the real actions it recorded — real taps, on the real app.
   It is not a simulation.
 - Wallet-state detection (connect dialog, approval screen, rejection,
@@ -104,9 +107,14 @@ To see the tester catch a break:
   anything inside a wallet app — you approve every request by hand.
 - **Wallets and system screens are skipped.** Known wallet apps and system
   credential screens are on a protected list: the tester drops their events without
-  reading, recording or logging them, and replay skips any step whose screen belongs
-  to one rather than tapping it. The protected-app list covers known wallets and
-  system screens only. An unlisted app is still fully visible.
+  reading or recording anything on screen, and replay skips any step whose screen
+  belongs to one rather than tapping it. Recording will not start, and a recording in
+  progress is stopped with a message, if a protected app is in the foreground or the
+  lock screen is showing. Only the app's package name is ever written to the log in
+  those cases. The protected-app list covers known wallets and system screens only.
+  An unlisted app is still fully visible.
+- **Password fields.** Text and contentDescription are never read from a node Android
+  marks as a password field.
 - **Limits you should know about.** The accessibility service sees every app, not
   just the one you are testing, so a recording that passes through another app can
   capture that app's on-screen labels too. There is no filtering of password or PIN

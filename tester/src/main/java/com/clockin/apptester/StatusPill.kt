@@ -103,6 +103,14 @@ class StatusPill(private val service: AccessibilityService) {
         render(line1Text = "WALLET SCREEN - SKIPPED", line2Text = null, tone = Tone.NEUTRAL)
     }
 
+    /** Recording was stopped, or refused to start, because a protected app or the lock
+     *  screen is in the way. Neutral, with the reason on line 2, and held long enough to
+     *  read (same delay as a break). */
+    fun showRecordingBlocked(headline: String, reason: String) {
+        render(line1Text = headline, line2Text = reason, tone = Tone.NEUTRAL)
+        scheduleHide(BREAK_FADE_DELAY_MS)
+    }
+
     /** Terminal state for a replay that broke nothing but skipped at least one step. */
     fun showFinishedWithSkips(skippedSteps: Int) {
         render(line1Text = "REPLAY DONE - $skippedSteps SKIPPED", line2Text = null, tone = Tone.NEUTRAL)

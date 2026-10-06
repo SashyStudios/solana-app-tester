@@ -70,7 +70,9 @@ class RecordingAccessibilityService : AccessibilityService() {
      *  that changed (event.source) instead. Screen transitions are comparatively rare
      *  next to how often content changes, so the heavier walk is reserved for them. */
     private fun snapshotLabels(node: AccessibilityNodeInfo, packageName: String) {
-        if (node.isClickable) {
+        // Password nodes: text and contentDescription are never read (isPassword is the only
+        // thing looked at). Their children, if any, are still walked.
+        if (node.isClickable && !node.isPassword) {
             node.viewIdResourceName?.let { resourceId ->
                 observeLabel(packageName, resourceId, node.text?.toString(), node.contentDescription?.toString())
             }
@@ -106,12 +108,33 @@ class RecordingAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         // Protected-package guard, deliberately the very first thing in this method:
-        // before any event.source is fetched and before anything is logged, so a wallet
-        // or system credential screen is never read, never recorded, and never even
-        // named in a log line. See PackageGuard.
-        if (PackageGuard.isProtected(event.packageName?.toString())) return
+        // before any event.source is fetched, so a wallet or system credential screen is
+        // never read and never recorded. See PackageGuard. The only thing looked at is
+        // event.packageName and eventType: a recording in progress is stopped (with a
+        // message naming the package, nothing from its screen) when such an app comes to
+        // the foreground or is tapped in.
+        val eventPackage = event.packageName?.toString()
+        if (PackageGuard.isProtected(eventPackage)) {
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+                event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED
+            ) {
+                stopRecordingBecauseBlocked(
+                    "$eventPackage is a protected app. The tester never reads or records inside a wallet."
+                )
+            }
+            return
+        }
 
         val isRecording = RecorderBridge.mode.value == RecorderMode.RECORDING
+
+        // Lock screen: stop on the next new window rather than on every event, since the
+        // check is a binder call. Only meaningful while recording.
+        if (isRecording && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            PackageGuard.isKeyguardShowing(this)
+        ) {
+            stopRecordingBecauseBlocked("the lock screen is showing. The tester does not record on a locked device.")
+            return
+        }
 
         // Seeds the label cache for every clickable element on a new screen, well
         // before anything on it could be tapped - see snapshotLabels.
@@ -140,7 +163,8 @@ class RecordingAccessibilityService : AccessibilityService() {
                 if (pkg != null && pkg != packageName) {
                     val src = event.source
                     val resId = src?.viewIdResourceName
-                    if (resId != null) {
+                    // isPassword is checked before text/contentDescription are touched.
+                    if (resId != null && src != null && !src.isPassword) {
                         observeLabel(pkg, resId, src.text?.toString(), src.contentDescription?.toString())
                     }
                     src?.recycle()
@@ -168,12 +192,15 @@ class RecordingAccessibilityService : AccessibilityService() {
         val resourceId = source.viewIdResourceName
         val history = resourceId?.let { labelCache["$stepPackageName/$it"] }
         val preTap = history?.previous ?: history?.current
+        // A password field's tap is still recorded (class, resource ID), but its text and
+        // contentDescription are never read, logged or saved.
+        val isPassword = source.isPassword
         val step = RecordedStep(
             packageName = stepPackageName,
             className = source.className?.toString(),
             resourceId = resourceId,
-            text = source.text?.toString(),
-            contentDescription = source.contentDescription?.toString(),
+            text = if (isPassword) null else source.text?.toString(),
+            contentDescription = if (isPassword) null else source.contentDescription?.toString(),
             preTapText = preTap?.text,
             preTapContentDescription = preTap?.contentDescription
         )
@@ -183,6 +210,33 @@ class RecordingAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         // Required override - cleanup happens in onDestroy.
+    }
+
+    /** Stops a recording in progress because a protected app or the lock screen took over.
+     *  Same stop path the button, volume-down and the watchdog use (RecorderBridge.stopRecording,
+     *  which saves what was captured so far); only the message differs. No-op unless
+     *  recording, so repeated events from the same window don't repeat it. */
+    private fun stopRecordingBecauseBlocked(reason: String) {
+        if (RecorderBridge.mode.value != RecorderMode.RECORDING) return
+        RecorderBridge.appendLog("Recording stopped: $reason")
+        RecorderBridge.stopRecording()
+        statusPill.showRecordingBlocked("RECORDING STOPPED", reason)
+    }
+
+    /** Why recording must not start right now, or null if it may. Looks only at the
+     *  foreground window's package name (no node content) and at the keyguard state. */
+    internal fun recordingBlockReason(): String? {
+        if (PackageGuard.isKeyguardShowing(this)) {
+            return "the lock screen is showing. The tester does not record on a locked device."
+        }
+        val root = rootInActiveWindow ?: return null
+        val foreground = root.packageName?.toString()
+        root.recycle()
+        return if (PackageGuard.isProtected(foreground)) {
+            "$foreground is a protected app. The tester never reads or records inside a wallet."
+        } else {
+            null
+        }
     }
 
     /**
@@ -480,7 +534,11 @@ class RecordingAccessibilityService : AccessibilityService() {
     /** Plain data only, by design - never an AccessibilityNodeInfo reference, so nothing
      *  returned from listClickableElements/collectClickableElements can ever be used
      *  after the root it came from is recycled. */
-    private data class ClickableElement(val resourceId: String?, val label: String, val className: String?)
+    private data class ClickableElement(val resourceId: String?, val label: String, val className: String?) {
+        /** Worth showing a developer: has an id or a real label. An element with neither
+         *  is just noise in a break explanation. */
+        val isListable: Boolean get() = resourceId != null || (label.isNotBlank() && label != UNLABELED)
+    }
 
     /**
      * Polls for a match every NODE_SEARCH_POLL_INTERVAL_MS, up to NODE_SEARCH_TIMEOUT_MS
@@ -591,11 +649,18 @@ class RecordingAccessibilityService : AccessibilityService() {
             else -> "No close match. ${onScreen.size} other elements are on screen."
         }
 
-        val remaining = onScreen.filterNot { it in namedInLine2 }.take(MAX_ALSO_ON_SCREEN_ELEMENTS)
-        val line3 = if (remaining.isNotEmpty()) {
-            "Also on screen: " + remaining.joinToString("; ") { "${it.resourceId ?: "(no id)"} '${it.label}'" }
-        } else {
-            null
+        // Elements with no id and no label are left out of the list - they'd just be noise.
+        // They're counted in a short note so the list doesn't silently under-report.
+        val notListable = onScreen.count { !it.isListable }
+        val remaining = onScreen.filterNot { it in namedInLine2 }.filter { it.isListable }
+            .take(MAX_ALSO_ON_SCREEN_ELEMENTS)
+        val unlabeledNote = if (notListable > 0) " ($notListable with no id or label not listed)" else ""
+        val line3 = when {
+            remaining.isNotEmpty() ->
+                "Also on screen: " + remaining.joinToString("; ") { "${it.resourceId ?: "(no id)"} '${it.label}'" } +
+                    unlabeledNote
+            notListable > 0 -> "Also on screen:$unlabeledNote"
+            else -> null
         }
 
         return listOfNotNull(line1, line2, line3).joinToString("\n")
@@ -619,10 +684,12 @@ class RecordingAccessibilityService : AccessibilityService() {
      *  only in the displayed "Also on screen:" line, not here. */
     private fun collectClickableElements(node: AccessibilityNodeInfo, into: MutableList<ClickableElement>) {
         if (node.isClickable) {
-            val label = node.text?.toString()
-                ?: node.contentDescription?.toString()
+            // Password nodes: text and contentDescription are never read - the label falls
+            // straight through to the resource ID.
+            val label = (if (node.isPassword) null else node.text?.toString())
+                ?: (if (node.isPassword) null else node.contentDescription?.toString())
                 ?: node.viewIdResourceName
-                ?: "(unlabeled)"
+                ?: UNLABELED
             into.add(ClickableElement(node.viewIdResourceName, label, node.className?.toString()))
         }
         for (i in 0 until node.childCount) {
@@ -666,6 +733,8 @@ class RecordingAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        private const val UNLABELED = "(unlabeled)"
+
         // Delay between replay steps.
         private const val REPLAY_STEP_DELAY_MS = 1000L
         private const val TARGET_APP_LAUNCH_DELAY_MS = 1500L

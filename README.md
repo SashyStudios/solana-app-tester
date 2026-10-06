@@ -1,5 +1,7 @@
 # Solana App Tester
 
+Record once. Replay every change.
+
 Record a flow in your Android app once, replay it after every change, and get a
 plain explanation of what broke.
 
@@ -7,7 +9,16 @@ Built for the CLOCK IN Solana Mobile hackathon.
 
 ## Why I built it
 
-[Josh's origin story goes here]
+I build apps alone. For a long time I couldn't get anyone to test them. Family
+and friends wouldn't, even when I gave the app away and sat down to go through
+it with them. The only thing that worked was paying people a few dollars to
+use my memorial app, and that's how I found most of my bugs. But after any big
+change, something somewhere might have broken, and checking meant tapping
+through every step again myself.
+
+So I built Solana App Tester. Record a flow once, replay it after every
+change, and see what broke. It doesn't replace real testers or real feedback.
+It replaces the part where I re-tap the same flow by hand.
 
 ## What it does today
 

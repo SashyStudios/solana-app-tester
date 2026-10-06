@@ -595,8 +595,8 @@ class RecordingAccessibilityService : AccessibilityService() {
     /** Never recycles root itself - same ownership convention as snapshotLabels, the
      *  caller recycles it. Recycles every child it fetches via getChild(). Uncapped -
      *  breakExplanation()'s candidate search needs every clickable element, not just
-     *  the ones it ends up displaying; truncation to MAX_ON_SCREEN_ELEMENTS happens only
-     *  in the displayed "On screen:" line, not here. */
+     *  the ones it ends up displaying; truncation to MAX_ALSO_ON_SCREEN_ELEMENTS happens
+     *  only in the displayed "Also on screen:" line, not here. */
     private fun collectClickableElements(node: AccessibilityNodeInfo, into: MutableList<ClickableElement>) {
         if (node.isClickable) {
             val label = node.text?.toString()

@@ -1,9 +1,8 @@
 # Solana App Tester
 
-Record once. Replay every change.
+Catch what your update broke.
 
-Record a flow in your Android app once, replay it after every change, and get a
-plain explanation of what broke.
+Record your app once. Check it again with one tap.
 
 Built for the CLOCK IN Solana Mobile hackathon.
 

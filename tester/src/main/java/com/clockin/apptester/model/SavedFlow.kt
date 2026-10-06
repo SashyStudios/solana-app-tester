@@ -12,15 +12,19 @@ import java.io.File
  * identity ("packageName_savedAtEpochMillis") derived from JSON content rather than the
  * filename, so it means the same thing whether the backing file uses the new per-recording
  * naming or the old one-file-per-package naming (see SavedFlowStore). fileName is the
- * actual file on disk this flow was loaded from/written to - needed by delete(), otherwise
- * opaque to callers.
+ * actual file on disk this flow was loaded from/written to - needed by delete() and
+ * rename(), otherwise opaque to callers. name is null unless the user has explicitly
+ * renamed this flow - a file without one (every file saved before renaming existed, or
+ * one never renamed since) is not an error, callers show the same "<App name> #N" default
+ * they always have (see MainActivity's displayNameFor).
  */
 data class SavedFlow(
     val id: String,
     val packageName: String,
     val steps: List<RecordedStep>,
     val savedAtEpochMillis: Long,
-    val fileName: String
+    val fileName: String,
+    val name: String? = null
 )
 
 /**
@@ -72,6 +76,25 @@ object SavedFlowStore {
         File(context.filesDir, flow.fileName).delete()
     }
 
+    /** Rewrites this flow's existing file with the same content plus a new name - the
+     *  one case where an existing flow file is deliberately overwritten (save() never
+     *  overwrites; this is a rename of something already saved, not a new recording).
+     *  A blank name (after trimming) clears back to null, which falls back to the
+     *  computed default display name. */
+    fun rename(context: Context, flow: SavedFlow, newName: String): SavedFlow {
+        val trimmed = newName.trim()
+        val root = JSONObject()
+        root.put("formatVersion", FORMAT_VERSION)
+        root.put("packageName", flow.packageName)
+        root.put("savedAtEpochMillis", flow.savedAtEpochMillis)
+        root.putNullable("name", trimmed.ifEmpty { null })
+        val stepsArray = JSONArray()
+        flow.steps.forEach { stepsArray.put(it.toJson()) }
+        root.put("steps", stepsArray)
+        File(context.filesDir, flow.fileName).writeText(root.toString())
+        return flow.copy(name = trimmed.ifEmpty { null })
+    }
+
     /**
      * Picks the target app out of a recording's steps as the most common packageName
      * among them, after excluding the device's current home/launcher app and systemui -
@@ -109,7 +132,10 @@ object SavedFlowStore {
         val savedAt = root.optLong("savedAtEpochMillis", 0L)
         val stepsArray = root.optJSONArray("steps") ?: JSONArray()
         val steps = (0 until stepsArray.length()).map { i -> stepsArray.getJSONObject(i).toRecordedStep() }
-        return SavedFlow(id(packageName, savedAt), packageName, steps, savedAt, fileName)
+        // Absent in every file saved before renaming existed, and in any file never
+        // renamed since - not an error, just means "use the computed default name."
+        val name = if (root.has("name") && !root.isNull("name")) root.getString("name") else null
+        return SavedFlow(id(packageName, savedAt), packageName, steps, savedAt, fileName, name)
     }
 
     private fun RecordedStep.toJson(): JSONObject {

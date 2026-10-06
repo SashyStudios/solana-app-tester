@@ -30,6 +30,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -89,6 +91,12 @@ private fun resolveAppLabel(context: Context, packageName: String): String {
     }.getOrDefault(packageName)
 }
 
+/** "<App name> #N" by default, or the flow's own stored name if it's been renamed - the
+ *  single source of truth for what a saved flow is called, used by the row, the Last
+ *  result card, and the Copy report header. */
+private fun displayNameFor(context: Context, flow: SavedFlow, ordinal: Int): String =
+    flow.name ?: "${resolveAppLabel(context, flow.packageName)} #$ordinal"
+
 private fun formatSavedTime(epochMillis: Long): String {
     if (epochMillis <= 0L) return "unknown time"
     val formatter = DateTimeFormatter.ofPattern("MMM d, HH:mm")
@@ -127,15 +135,17 @@ private fun buildFlowDisplayList(savedFlows: List<SavedFlow>): List<DisplayFlow>
     }
 }
 
-/** Full plain-text report for "Copy report": header (target app, date/time, Android
- *  version), the recorded steps, and the full replay log - same data already on screen,
- *  just as text someone can paste into a bug report or a Discord message. */
-private fun buildFullReportText(steps: List<RecordedStep>, log: List<String>): String {
+/** Full plain-text report for "Copy report": header (the active flow's name if there is
+ *  one, date/time, Android version), the recorded steps, and the full replay log - same
+ *  data already on screen, just as text someone can paste into a bug report or a Discord
+ *  message. flowName is null when there's no active saved flow (e.g. an unsaved
+ *  recording), falling back to the raw target package. */
+private fun buildFullReportText(steps: List<RecordedStep>, log: List<String>, flowName: String?): String {
     val now = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").format(LocalDateTime.now())
-    val appPackage = steps.firstOrNull()?.packageName ?: "(none)"
+    val appLabel = flowName ?: steps.firstOrNull()?.packageName ?: "(none)"
     return buildString {
         appendLine("=== Solana App Tester Report ===")
-        appendLine("App: $appPackage")
+        appendLine("App: $appLabel")
         appendLine("Date: $now")
         appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         appendLine("Note: the tool reports differences it can observe on screen. It doesn't know what code changed.")
@@ -162,8 +172,11 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
     val activeFlowId by RecorderBridge.activeFlowId.collectAsState()
     val lastResult by RecorderBridge.lastResult.collectAsState()
     var flowPendingDelete by remember { mutableStateOf<SavedFlow?>(null) }
+    var flowPendingRename by remember { mutableStateOf<SavedFlow?>(null) }
 
     val displayFlows = remember(savedFlows) { buildFlowDisplayList(savedFlows) }
+    val activeDisplay = displayFlows.firstOrNull { it.flow.id == activeFlowId }
+    val activeFlowName = activeDisplay?.let { displayNameFor(context, it.flow, it.ordinal) }
 
     Column(
         modifier = Modifier
@@ -230,7 +243,6 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
         }
 
         lastResult?.let { result ->
-            val activeDisplay = displayFlows.firstOrNull { it.flow.id == activeFlowId }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -247,9 +259,7 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
                 )
                 when (result) {
                     is ReplayResult.Passed -> {
-                        val appSuffix = activeDisplay?.let {
-                            " (${resolveAppLabel(context, it.flow.packageName)} #${it.ordinal})"
-                        } ?: ""
+                        val appSuffix = activeFlowName?.let { " ($it)" } ?: ""
                         Text(
                             "Replay passed: ${result.totalSteps} of ${result.totalSteps} steps$appSuffix",
                             fontFamily = FontFamily.Monospace,
@@ -305,6 +315,7 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
                         isActive = display.flow.id == activeFlowId,
                         enabled = mode == RecorderMode.IDLE,
                         onSelect = { RecorderBridge.selectSavedFlow(display.flow) },
+                        onRenameRequested = { flowPendingRename = display.flow },
                         onDeleteRequested = { flowPendingDelete = display.flow }
                     )
                 }
@@ -401,7 +412,7 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
 
             Button(
                 onClick = {
-                    clipboardManager.setText(AnnotatedString(buildFullReportText(steps, log)))
+                    clipboardManager.setText(AnnotatedString(buildFullReportText(steps, log, activeFlowName)))
                     Toast.makeText(context, "Report copied", Toast.LENGTH_SHORT).show()
                 },
                 modifier = Modifier.weight(1f),
@@ -470,14 +481,57 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
             textContentColor = SashyColors.DimWhite
         )
     }
+
+    flowPendingRename?.let { flow ->
+        val display = displayFlows.firstOrNull { it.flow.id == flow.id }
+        val ordinal = display?.ordinal ?: 1
+        var nameInput by remember(flow.id) { mutableStateOf(displayNameFor(context, flow, ordinal)) }
+        AlertDialog(
+            onDismissRequest = { flowPendingRename = null },
+            title = { Text("Rename flow") },
+            text = {
+                OutlinedTextField(
+                    value = nameInput,
+                    onValueChange = { nameInput = it },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = SashyColors.White,
+                        unfocusedTextColor = SashyColors.White,
+                        focusedContainerColor = SashyColors.CardBlack,
+                        unfocusedContainerColor = SashyColors.CardBlack,
+                        focusedBorderColor = SashyColors.ElectricGreen,
+                        unfocusedBorderColor = SashyColors.BorderGray,
+                        cursorColor = SashyColors.ElectricGreen
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    RecorderBridge.renameSavedFlow(context, flow, nameInput)
+                    flowPendingRename = null
+                }) {
+                    Text("Save", color = SashyColors.ElectricGreen)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { flowPendingRename = null }) {
+                    Text("Cancel", color = SashyColors.White)
+                }
+            },
+            containerColor = SashyColors.CardBlack,
+            titleContentColor = SashyColors.White,
+            textContentColor = SashyColors.DimWhite
+        )
+    }
 }
 
-/** One row per saved flow - "<App name> #N | <step count> steps | <date time>", where
- *  #N is this flow's ordinal within its own app's group (see buildFlowDisplayList), and
- *  app name falls back to the raw package name if PackageManager can't resolve a label
- *  (e.g. the app was uninstalled since saving). Tapping it makes it the active flow
- *  (green highlight); "Delete" asks for confirmation before removing anything - every
- *  other flow, including other recordings of the same app, is left alone. */
+/** One row per saved flow - "<name> | <step count> steps | <date time>", where <name> is
+ *  the flow's stored name if it's been renamed, else the same "<App name> #N" default as
+ *  before (see displayNameFor; #N is this flow's ordinal within its own app's group, see
+ *  buildFlowDisplayList). Tapping the row makes it the active flow (green highlight);
+ *  "Rename" opens a text dialog pre-filled with the current name; "Delete" asks for
+ *  confirmation before removing anything - every other flow, including other recordings
+ *  of the same app, is left alone by either action. */
 @Composable
 private fun SavedFlowRow(
     flow: SavedFlow,
@@ -485,10 +539,11 @@ private fun SavedFlowRow(
     isActive: Boolean,
     enabled: Boolean,
     onSelect: () -> Unit,
+    onRenameRequested: () -> Unit,
     onDeleteRequested: () -> Unit
 ) {
     val context = LocalContext.current
-    val appLabel = remember(flow.packageName) { resolveAppLabel(context, flow.packageName) }
+    val displayName = remember(flow.name, flow.packageName, ordinal) { displayNameFor(context, flow, ordinal) }
     val savedTime = remember(flow.savedAtEpochMillis) { formatSavedTime(flow.savedAtEpochMillis) }
     val borderColor = if (isActive) SashyColors.ElectricGreen else SashyColors.BorderGray
 
@@ -503,12 +558,15 @@ private fun SavedFlowRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            "$appLabel #$ordinal | ${flow.steps.size} steps | $savedTime",
+            "$displayName | ${flow.steps.size} steps | $savedTime",
             modifier = Modifier.weight(1f),
             fontFamily = FontFamily.Monospace,
             fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
             color = if (isActive) SashyColors.ElectricGreen else SashyColors.White
         )
+        TextButton(onClick = onRenameRequested) {
+            Text("Rename", color = SashyColors.ElectricGreen)
+        }
         TextButton(onClick = onDeleteRequested) {
             Text("Delete", color = SashyColors.ErrorRed)
         }

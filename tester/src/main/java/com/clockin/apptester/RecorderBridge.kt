@@ -175,6 +175,14 @@ object RecorderBridge {
         _activeFlowId.value = flow.id
     }
 
+    /** Renames exactly this one flow - its id, fileName, packageName, steps and
+     *  savedAtEpochMillis are all unchanged, so this never affects which flow is active
+     *  or what's currently loaded into _recordedSteps, only what it's displayed as. */
+    fun renameSavedFlow(context: Context, flow: SavedFlow, newName: String) {
+        val renamed = SavedFlowStore.rename(context, flow, newName)
+        _savedFlows.update { list -> list.map { if (it.id == renamed.id) renamed else it } }
+    }
+
     /** Removes exactly this one flow's file - every other saved flow, including others
      *  for the same app, is untouched. If the deleted flow was the active one, clears it
      *  from the current in-memory recording too - otherwise the step list/replay button

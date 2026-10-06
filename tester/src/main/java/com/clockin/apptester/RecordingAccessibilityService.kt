@@ -8,6 +8,7 @@ import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.clockin.apptester.model.RecordedStep
+import com.clockin.apptester.model.ReplayResult
 import com.clockin.apptester.model.SavedFlow
 import com.clockin.apptester.model.SavedFlowStore
 import com.clockin.apptester.model.hasNoIdentity
@@ -408,13 +409,18 @@ class RecordingAccessibilityService : AccessibilityService() {
             }
             var completedSteps = 0
             var broke = false
+            var failedStepNumber = 0
+            var failureExplanation = ""
             for ((index, step) in steps.withIndex()) {
                 statusPill.showReplay(index + 1, steps.size, step.primaryLabel())
                 when (val lookup = findNodeWithRetry(step)) {
                     is ReplayLookup.NotFound -> {
-                        RecorderBridge.appendLog(breakExplanation(index, steps.size, step, lookup.onScreen))
+                        val explanation = breakExplanation(steps, index, step, lookup.onScreen)
+                        RecorderBridge.appendLog(explanation)
                         statusPill.showBreak(index + 1)
                         broke = true
+                        failedStepNumber = index + 1
+                        failureExplanation = explanation
                     }
                     is ReplayLookup.Found -> {
                         val result = lookup.result
@@ -442,6 +448,13 @@ class RecordingAccessibilityService : AccessibilityService() {
                 statusPill.showFinished()
             }
             RecorderBridge.appendLog("Replay finished: $completedSteps of ${steps.size} steps ran.")
+            RecorderBridge.recordReplayResult(
+                if (broke) {
+                    ReplayResult.Failed(failedStepNumber, steps.size, failureExplanation)
+                } else {
+                    ReplayResult.Passed(steps.size)
+                }
+            )
             RecorderBridge.replayFinished()
         }
     }
@@ -482,7 +495,10 @@ class RecordingAccessibilityService : AccessibilityService() {
                 if (root != null) {
                     result = findNode(root, step)
                     if (result == null) {
-                        lastOnScreen = listClickableElements(root, MAX_ON_SCREEN_ELEMENTS)
+                        // Uncapped - breakExplanation() needs every clickable element on
+                        // screen to compute rename candidates correctly, not just the
+                        // handful it ends up displaying.
+                        lastOnScreen = listClickableElements(root)
                     }
                     root.recycle()
                 }
@@ -493,41 +509,69 @@ class RecordingAccessibilityService : AccessibilityService() {
         return if (found != null) ReplayLookup.Found(found) else ReplayLookup.NotFound(lastOnScreen)
     }
 
-    /** "expected <name>, not found", up to 5 clickable elements currently on screen, and
-     *  the closest match (same class) flagged as possibly renamed - the minimal break
-     *  explanation from CLAUDE.md's "Break explanations" section. Observable differences
-     *  only: this never claims to know what changed in the target app's code. */
+    /**
+     * "expected <name>, not found", up to MAX_ON_SCREEN_ELEMENTS clickable elements
+     * currently on screen, and a rename candidate assessment - the minimal break
+     * explanation from CLAUDE.md's "Break explanations" section. Observable differences
+     * only: this never claims to know what changed in the target app's code.
+     *
+     * Candidates are computed over every on-screen element (not just the ones shown):
+     * same class as the failing step, and not "claimed" by any OTHER step already in
+     * this recording - by resourceId or by label - since an element some other step
+     * already expects is more likely to legitimately be that other control than a
+     * renamed version of this one. Zero candidates, one, or several are each reported
+     * differently so a developer never mistakes "several equally-likely candidates" for
+     * "found the one rename."
+     */
     private fun breakExplanation(
+        steps: List<RecordedStep>,
         index: Int,
-        totalSteps: Int,
         step: RecordedStep,
         onScreen: List<ClickableElement>
     ): String {
-        val closest = onScreen.firstOrNull { it.className == step.className }
+        val otherSteps = steps.filterIndexed { i, _ -> i != index }
+        val claimedResourceIds = otherSteps.mapNotNull { it.resourceId }.toSet()
+        val claimedLabels = otherSteps.map { it.primaryLabel() }.toSet()
+        val candidates = onScreen.filter { element ->
+            element.className == step.className &&
+                (element.resourceId == null || element.resourceId !in claimedResourceIds) &&
+                element.label !in claimedLabels
+        }
         return buildString {
-            append("Step ${index + 1}/$totalSteps: expected ${step.primaryLabel()}, not found.")
+            append("Step ${index + 1}/${steps.size}: expected ${step.primaryLabel()}, not found.")
             if (onScreen.isNotEmpty()) {
                 append(" On screen: ")
-                append(onScreen.joinToString("; ") { "${it.resourceId ?: "(no id)"} '${it.label}'" })
+                append(
+                    onScreen.take(MAX_ON_SCREEN_ELEMENTS)
+                        .joinToString("; ") { "${it.resourceId ?: "(no id)"} '${it.label}'" }
+                )
             }
-            if (closest != null) {
-                append(" Possibly renamed: ${closest.resourceId ?: "(no id)"} '${closest.label}'.")
+            when (candidates.size) {
+                0 -> append(" No likely rename candidate found among on-screen elements.")
+                1 -> {
+                    val only = candidates.single()
+                    append(" Possibly renamed: ${only.resourceId ?: "(no id)"} '${only.label}'.")
+                }
+                else -> {
+                    append(" Candidates: ")
+                    append(candidates.joinToString("; ") { "${it.resourceId ?: "(no id)"} '${it.label}'" })
+                }
             }
         }
     }
 
-    private fun listClickableElements(root: AccessibilityNodeInfo, limit: Int): List<ClickableElement> {
+    private fun listClickableElements(root: AccessibilityNodeInfo): List<ClickableElement> {
         val found = mutableListOf<ClickableElement>()
-        collectClickableElements(root, limit, found)
+        collectClickableElements(root, found)
         return found
     }
 
     /** Never recycles root itself - same ownership convention as snapshotLabels, the
-     *  caller recycles it. Recycles every child it fetches via getChild(). Stops
-     *  early once limit is reached so a large/deep tree doesn't get fully walked
-     *  just to report 5 elements. */
-    private fun collectClickableElements(node: AccessibilityNodeInfo, limit: Int, into: MutableList<ClickableElement>) {
-        if (into.size >= limit) return
+     *  caller recycles it. Recycles every child it fetches via getChild(). Uncapped -
+     *  breakExplanation()'s candidate search needs every clickable element, not just
+     *  the ones it ends up displaying; truncation to MAX_ON_SCREEN_ELEMENTS happens only
+     *  in the displayed "On screen:" line, not here. */
+    private fun collectClickableElements(node: AccessibilityNodeInfo, into: MutableList<ClickableElement>) {
         if (node.isClickable) {
             val label = node.text?.toString()
                 ?: node.contentDescription?.toString()
@@ -536,10 +580,9 @@ class RecordingAccessibilityService : AccessibilityService() {
             into.add(ClickableElement(node.viewIdResourceName, label, node.className?.toString()))
         }
         for (i in 0 until node.childCount) {
-            if (into.size >= limit) return
             val child = node.getChild(i) ?: continue
             try {
-                collectClickableElements(child, limit, into)
+                collectClickableElements(child, into)
             } finally {
                 child.recycle()
             }
@@ -585,8 +628,9 @@ class RecordingAccessibilityService : AccessibilityService() {
         private const val NODE_SEARCH_TIMEOUT_MS = 3000L
         private const val NODE_SEARCH_POLL_INTERVAL_MS = 300L
 
-        // Cap on how many on-screen clickable elements a break explanation lists.
-        private const val MAX_ON_SCREEN_ELEMENTS = 5
+        // Cap on how many on-screen clickable elements a break explanation's "On screen:"
+        // line lists - the candidate search itself is uncapped, see collectClickableElements.
+        private const val MAX_ON_SCREEN_ELEMENTS = 8
 
         // Gives the current tap's touch-up event time to finish resolving under the old
         // input mode before the touch-exploration flag switches - see setTouchExplorationRequested.

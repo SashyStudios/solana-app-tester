@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.clockin.apptester.model.RecordedStep
+import com.clockin.apptester.model.ReplayResult
 import com.clockin.apptester.model.SavedFlow
 import com.clockin.apptester.model.hasNoIdentity
 import com.clockin.apptester.model.postTapDetail
@@ -158,6 +159,7 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
     val countdown by RecorderBridge.countdownSecondsRemaining.collectAsState()
     val savedFlows by RecorderBridge.savedFlows.collectAsState()
     val activeFlowId by RecorderBridge.activeFlowId.collectAsState()
+    val lastResult by RecorderBridge.lastResult.collectAsState()
     var flowPendingDelete by remember { mutableStateOf<SavedFlow?>(null) }
 
     val displayFlows = remember(savedFlows) { buildFlowDisplayList(savedFlows) }
@@ -224,6 +226,50 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
             )
         ) {
             Text(startButtonLabel)
+        }
+
+        lastResult?.let { result ->
+            val activeDisplay = displayFlows.firstOrNull { it.flow.id == activeFlowId }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SashyColors.CardBlack, RoundedCornerShape(12.dp))
+                    .border(1.dp, SashyColors.BorderGray, RoundedCornerShape(12.dp))
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    "Last result",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = SashyColors.White
+                )
+                when (result) {
+                    is ReplayResult.Passed -> {
+                        val appSuffix = activeDisplay?.let {
+                            " (${resolveAppLabel(context, it.flow.packageName)} #${it.ordinal})"
+                        } ?: ""
+                        Text(
+                            "Replay passed: ${result.totalSteps} of ${result.totalSteps} steps$appSuffix",
+                            fontFamily = FontFamily.Monospace,
+                            color = SashyColors.ElectricGreen
+                        )
+                    }
+                    is ReplayResult.Failed -> {
+                        Text(
+                            "Step ${result.stepNumber} of ${result.totalSteps} failed",
+                            fontFamily = FontFamily.Monospace,
+                            color = SashyColors.ErrorRed
+                        )
+                        Text(
+                            result.explanation,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = SashyColors.ErrorRed
+                        )
+                    }
+                }
+            }
         }
 
         Text(

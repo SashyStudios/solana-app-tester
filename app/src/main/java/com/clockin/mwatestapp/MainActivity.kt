@@ -21,6 +21,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var activityResultSender: ActivityResultSender
     private val viewModel: MainViewModel by viewModels()
 
+    // Local to this screen, not the ViewModel - the three safe test-action buttons never
+    // touch wallet/MWA state, so there's no reason to route them through MainViewModel.
+    // Resets on process/Activity recreation, which is fine for a throwaway counter.
+    private var pingCount = 0
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         activityResultSender = ActivityResultSender(this)
@@ -62,6 +67,42 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        setUpSafeTestActions()
+    }
+
+    /**
+     * Three buttons that never touch wallet/MWA state at all - a target the tester can
+     * record/replay against without a devnet wallet connected. The planted demo bug (see
+     * CLAUDE.md status) lives here: in the v2 build flavor only, btnCheck's id and label
+     * change (btnCheck/"Check status" -> btnStatusCheck/"Run check"), simulating a
+     * developer renaming a control between versions. v1 is unchanged either way.
+     */
+    private fun setUpSafeTestActions() {
+        val btnCheck = findViewById<Button>(R.id.btnCheck)
+        val btnPing = findViewById<Button>(R.id.btnPing)
+        val btnReset = findViewById<Button>(R.id.btnReset)
+        val resultText = findViewById<TextView>(R.id.txtSafeResult)
+        val buildLabel = findViewById<TextView>(R.id.txtBuildLabel)
+
+        if (BuildConfig.FLAVOR == "v2") {
+            btnCheck.id = R.id.btnStatusCheck
+            btnCheck.text = "Run check"
+        }
+
+        btnPing.setOnClickListener {
+            pingCount++
+            resultText.text = "Ping #$pingCount sent"
+        }
+        btnCheck.setOnClickListener {
+            resultText.text = "Status: OK ($pingCount pings)"
+        }
+        btnReset.setOnClickListener {
+            pingCount = 0
+            resultText.text = "Counter reset"
+        }
+
+        buildLabel.text = "build: ${BuildConfig.FLAVOR}"
     }
 
     private fun messageColor(status: FlowStatus): Int = when (status) {

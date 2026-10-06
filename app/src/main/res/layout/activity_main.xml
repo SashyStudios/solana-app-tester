@@ -91,5 +91,68 @@
             android:textSize="12sp"
             android:visibility="gone" />
 
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="16dp"
+            android:background="@color/border_gray" />
+
+        <!-- Safe test actions: no wallet/MWA/SKR involved at all, so the tester can
+             record/replay against something that doesn't need a devnet wallet connected.
+             btnCheck's id and text change in the v2 build flavor only - see MainActivity. -->
+        <TextView
+            android:id="@+id/tvSafeActionsHeader"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Safe test actions (no wallet)"
+            android:textColor="@color/white"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnPing"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/rounded_button_bg"
+            android:backgroundTint="@color/border_gray"
+            android:text="Ping"
+            android:textColor="@color/white" />
+
+        <Button
+            android:id="@+id/btnCheck"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/rounded_button_bg"
+            android:backgroundTint="@color/border_gray"
+            android:text="Check status"
+            android:textColor="@color/white" />
+
+        <Button
+            android:id="@+id/btnReset"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/rounded_button_bg"
+            android:backgroundTint="@color/border_gray"
+            android:text="Reset"
+            android:textColor="@color/white" />
+
+        <TextView
+            android:id="@+id/txtSafeResult"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textColor="@color/dim_white" />
+
+        <TextView
+            android:id="@+id/txtBuildLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:textColor="@color/dim_white"
+            android:textSize="11sp" />
+
     </LinearLayout>
 </ScrollView>

@@ -3,6 +3,7 @@ package com.clockin.apptester
 import android.content.Context
 import android.util.Log
 import com.clockin.apptester.model.RecordedStep
+import com.clockin.apptester.model.ReplayResult
 import com.clockin.apptester.model.SavedFlow
 import com.clockin.apptester.model.SavedFlowStore
 import com.clockin.apptester.model.unlabeledStepWarning
@@ -45,6 +46,12 @@ object RecorderBridge {
     private val _activeFlowId = MutableStateFlow<String?>(null)
     val activeFlowId: StateFlow<String?> = _activeFlowId.asStateFlow()
 
+    // Outcome of the most recently finished replay - null until the first one ever runs,
+    // then stays showing that result until a later replay overwrites it. See the "Last
+    // result" card in MainActivity.
+    private val _lastResult = MutableStateFlow<ReplayResult?>(null)
+    val lastResult: StateFlow<ReplayResult?> = _lastResult.asStateFlow()
+
     internal fun attachService(instance: RecordingAccessibilityService) {
         service = instance
         _isServiceConnected.value = true
@@ -73,6 +80,11 @@ object RecorderBridge {
 
     internal fun replayFinished() {
         _mode.value = RecorderMode.IDLE
+    }
+
+    /** Called by the service once a replay loop ends, pass or fail. */
+    internal fun recordReplayResult(result: ReplayResult) {
+        _lastResult.value = result
     }
 
     /** Called by the service's countdown loop on every tick; null once it ends. */

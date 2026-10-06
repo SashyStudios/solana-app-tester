@@ -16,6 +16,21 @@ android {
         versionName "1.0"
     }
 
+    // v1/v2 share one applicationId (no suffix) so v2 installs over v1 with a plain
+    // adb install -r, the same way any regular update would - needed so the tester can
+    // replay against "the demo app" without caring which flavor is currently installed.
+    // See CLAUDE.md status: v2 is the planted demo bug (Check status renamed to Run
+    // check, with a changed view id), not a different app.
+    flavorDimensions = ["version"]
+    productFlavors {
+        v1 {
+            dimension "version"
+        }
+        v2 {
+            dimension "version"
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
@@ -26,6 +41,13 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11
+    }
+
+    // Off by default in this AGP version - needed for BuildConfig.FLAVOR, which
+    // MainActivity reads to show "build: v1"/"build: v2" and to apply the v2-only
+    // btnCheck rename.
+    buildFeatures {
+        buildConfig true
     }
 
     kotlin {

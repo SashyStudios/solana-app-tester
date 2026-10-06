@@ -1,0 +1,6 @@
+<resources>
+    <!-- Declared but never attached to a view in the layout - MainActivity assigns it to
+         btnCheck at runtime, in the v2 build flavor only, to simulate a developer renaming
+         a control's resource id between versions (see CLAUDE.md status). -->
+    <item name="btnStatusCheck" type="id" />
+</resources>

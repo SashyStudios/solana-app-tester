@@ -89,6 +89,30 @@ To see the tester catch a break:
    ID and label both changed. The tester's report should name
    `btnStatusCheck` / "Run check" as the likely rename.
 
+## Privacy and safety
+
+- **Recordings stay on your device.** Flows are saved as JSON in the app's own
+  private internal storage. There is no cloud sync, no account, and no database.
+- **Nothing is sent anywhere.** The tester makes no network calls. Wallet connect
+  talks to the wallet app over a local socket on the device, and sends only this
+  app's name and the cluster — never your recorded steps, screen labels or reports.
+- **What a recording contains.** For each step you tap: the app's package name, the
+  view's class, its resource ID, and its visible label (text or contentDescription).
+  No screenshots, no coordinates, no typed text.
+- **Devnet only.** The cluster is checked in code before every wallet request and
+  anything other than Solana devnet is refused. The tester never taps or approves
+  anything inside a wallet app — you approve every request by hand.
+- **Wallets and system screens are skipped.** Known wallet apps and system
+  credential screens are on a protected list: the tester drops their events without
+  reading, recording or logging them, and replay skips any step whose screen belongs
+  to one rather than tapping it. The protected-app list covers known wallets and
+  system screens only. An unlisted app is still fully visible.
+- **Limits you should know about.** The accessibility service sees every app, not
+  just the one you are testing, so a recording that passes through another app can
+  capture that app's on-screen labels too. There is no filtering of password or PIN
+  fields: a PIN pad built from ordinary buttons in an unlisted app would be recorded
+  like any other taps. Use a throwaway devnet wallet rather than a real one.
+
 ## Roadmap
 
 - Modular flows — record each screen as its own segment, then chain segments

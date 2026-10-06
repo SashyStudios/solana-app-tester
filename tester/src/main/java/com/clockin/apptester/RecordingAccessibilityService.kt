@@ -3,7 +3,6 @@ package com.clockin.apptester
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
-import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -106,23 +105,11 @@ class RecordingAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        // TEMPORARY diagnostic logging for the Oct 4 investigation into why ordinary
-        // taps don't produce TYPE_VIEW_CLICKED with touch exploration off. Remove once
-        // that's resolved. Fetches its own source and recycles it immediately rather
-        // than reusing the fetch below, so it doesn't change what that existing code does.
-        // touchExploration reads the live flag straight off serviceInfo rather than
-        // tracking a separate field, so this stays a pure read with zero risk to
-        // setTouchExplorationRequested's own deferred-toggle logic.
-        val diagnosticSource = event.source
-        val touchExplorationOn =
-            (serviceInfo?.flags ?: 0) and AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE != 0
-        Log.d(
-            "RecordingA11yService",
-            "event type=${AccessibilityEvent.eventTypeToString(event.eventType)} " +
-                "package=${event.packageName} sourceNull=${diagnosticSource == null} " +
-                "touchExploration=${if (touchExplorationOn) "on" else "off"}"
-        )
-        diagnosticSource?.recycle()
+        // Protected-package guard, deliberately the very first thing in this method:
+        // before any event.source is fetched and before anything is logged, so a wallet
+        // or system credential screen is never read, never recorded, and never even
+        // named in a log line. See PackageGuard.
+        if (PackageGuard.isProtected(event.packageName?.toString())) return
 
         val isRecording = RecorderBridge.mode.value == RecorderMode.RECORDING
 
@@ -163,6 +150,11 @@ class RecordingAccessibilityService : AccessibilityService() {
         }
 
         if (event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) return
+        // Nothing is read off the node unless we are actually recording. This used to
+        // build a RecordedStep in every mode and rely on RecorderBridge.appendStep to
+        // discard it, which meant the text of every tap was read in IDLE and REPLAYING
+        // too, then thrown away. The read surface now matches what's actually used.
+        if (!isRecording) return
         // Skip the tester tool's own UI (e.g. taps on "Stop Recording"/"Replay") - the
         // service has no packageNames filter so it can later see into the wallet app,
         // but that means our own controls would otherwise get recorded as steps too.
@@ -187,14 +179,6 @@ class RecordingAccessibilityService : AccessibilityService() {
         )
         source.recycle()
         RecorderBridge.appendStep(step)
-        if (isRecording) {
-            // TEMPORARY - pre-tap label fix investigation (see CLAUDE.md status). Remove
-            // once this has been verified reliable on-device.
-            Log.d(
-                "RecordingA11yService",
-                "captured step resourceId=$resourceId preTapText=${step.preTapText} postTapText=${step.text}"
-            )
-        }
     }
 
     override fun onInterrupt() {
@@ -408,12 +392,21 @@ class RecordingAccessibilityService : AccessibilityService() {
                 delay(TARGET_APP_LAUNCH_DELAY_MS)
             }
             var completedSteps = 0
+            var skippedSteps = 0
             var broke = false
             var failedStepNumber = 0
             var failureExplanation = ""
             for ((index, step) in steps.withIndex()) {
                 statusPill.showReplay(index + 1, steps.size, step.primaryLabel())
                 when (val lookup = findNodeWithRetry(step)) {
+                    is ReplayLookup.Skipped -> {
+                        RecorderBridge.appendLog(
+                            "Step ${index + 1}/${steps.size}: skipped - ${lookup.packageName} is " +
+                                "protected. The tester never reads or taps inside a wallet."
+                        )
+                        statusPill.showProtected()
+                        skippedSteps++
+                    }
                     is ReplayLookup.NotFound -> {
                         val explanation = breakExplanation(steps, index, step, lookup.onScreen)
                         RecorderBridge.appendLog(explanation)
@@ -445,14 +438,24 @@ class RecordingAccessibilityService : AccessibilityService() {
                 delay(REPLAY_STEP_DELAY_MS)
             }
             if (!broke) {
-                statusPill.showFinished()
+                // A run with skipped steps is not a clean pass and must not be shown as
+                // one - it gets its own neutral terminal state, not "REPLAY OK".
+                if (skippedSteps > 0) statusPill.showFinishedWithSkips(skippedSteps)
+                else statusPill.showFinished()
             }
-            RecorderBridge.appendLog("Replay finished: $completedSteps of ${steps.size} steps ran.")
-            RecorderBridge.recordReplayResult(
-                if (broke) {
-                    ReplayResult.Failed(failedStepNumber, steps.size, failureExplanation)
+            RecorderBridge.appendLog(
+                if (skippedSteps > 0) {
+                    "Replay finished: $completedSteps of ${steps.size} steps ran, $skippedSteps skipped."
                 } else {
-                    ReplayResult.Passed(steps.size)
+                    "Replay finished: $completedSteps of ${steps.size} steps ran."
+                }
+            )
+            RecorderBridge.recordReplayResult(
+                when {
+                    broke -> ReplayResult.Failed(failedStepNumber, steps.size, failureExplanation)
+                    skippedSteps > 0 ->
+                        ReplayResult.FinishedWithSkips(completedSteps, skippedSteps, steps.size)
+                    else -> ReplayResult.Passed(steps.size)
                 }
             )
             RecorderBridge.replayFinished()
@@ -467,6 +470,11 @@ class RecordingAccessibilityService : AccessibilityService() {
     private sealed class ReplayLookup {
         data class Found(val result: MatchResult) : ReplayLookup()
         data class NotFound(val onScreen: List<ClickableElement>) : ReplayLookup()
+
+        /** A protected package owned the active window - nothing was read out of it and
+         *  nothing was clicked. Deliberately distinct from NotFound: this is not a break,
+         *  it's the guard doing its job. See PackageGuard. */
+        data class Skipped(val packageName: String) : ReplayLookup()
     }
 
     /** Plain data only, by design - never an AccessibilityNodeInfo reference, so nothing
@@ -488,11 +496,22 @@ class RecordingAccessibilityService : AccessibilityService() {
      */
     private suspend fun findNodeWithRetry(step: RecordedStep): ReplayLookup {
         var lastOnScreen: List<ClickableElement> = emptyList()
+        var skippedPackage: String? = null
         val found = withTimeoutOrNull(NODE_SEARCH_TIMEOUT_MS) {
             var result: MatchResult? = null
             while (result == null) {
                 val root = rootInActiveWindow
                 if (root != null) {
+                    val rootPackage = root.packageName?.toString()
+                    if (PackageGuard.isProtected(rootPackage)) {
+                        // Recycle and leave at once: findNode is not called, no element
+                        // listing is walked, nothing at all is read out of this window.
+                        // Returns immediately rather than polling out the full timeout -
+                        // a protected window isn't a slow-rendering screen to wait on.
+                        root.recycle()
+                        skippedPackage = rootPackage
+                        return@withTimeoutOrNull null
+                    }
                     result = findNode(root, step)
                     if (result == null) {
                         // Uncapped - breakExplanation() needs every clickable element on
@@ -506,6 +525,7 @@ class RecordingAccessibilityService : AccessibilityService() {
             }
             result
         }
+        skippedPackage?.let { return ReplayLookup.Skipped(it) }
         return if (found != null) ReplayLookup.Found(found) else ReplayLookup.NotFound(lastOnScreen)
     }
 

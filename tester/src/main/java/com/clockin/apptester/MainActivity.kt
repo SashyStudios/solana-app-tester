@@ -296,6 +296,25 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
                             color = SashyColors.ElectricGreen
                         )
                     }
+                    is ReplayResult.FinishedWithSkips -> {
+                        // Deliberately neutral, never green: at least one step's window was
+                        // protected and skipped unread, so the flow wasn't verified end to
+                        // end. See PackageGuard.
+                        val appSuffix = activeFlowName?.let { " ($it)" } ?: ""
+                        Text(
+                            "Replay finished with skipped steps$appSuffix",
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = SashyColors.DimWhite
+                        )
+                        Text(
+                            "${result.completedSteps} ran, ${result.skippedSteps} skipped, " +
+                                "of ${result.totalSteps} steps",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = SashyColors.DimWhite
+                        )
+                    }
                     is ReplayResult.Failed -> {
                         // explanation's own first line already reads "Step N/M FAILED:
                         // expected ..., not found." - shown bold, the rest (rename

@@ -482,3 +482,72 @@ address and label render correctly; confirm Disconnect deauthorizes; confirm the
 message appears if Phantom is left on mainnet (its documented Android behaviour there is to
 show nothing at all rather than return an error); and confirm the wrong-wallet banner fires
 with a non-configured wallet.
+
+### Protected-package guard, strict version (Oct 6, applied - not yet verified on-device)
+Came out of a read-only privacy audit. The audit's findings that drove this: the service read
+node text on every `TYPE_VIEW_CLICKED` in **every** mode (the discard happened later in
+`RecorderBridge.appendStep`, so IDLE/COUNTDOWN/REPLAYING still read the text of every tap and
+threw it away); nothing anywhere checked `isPassword`; and a wallet PIN pad built from
+ordinary buttons would be captured digit by digit into a saved flow, the step list, logcat and
+Copy Report, with step order being the PIN. Note `isPassword` would not have caught that case
+anyway - those buttons aren't password fields - which is why this is a package guard, not a
+node-property check.
+
+- **`PackageGuard.kt`** (new): a fixed set - `com.solanamobile.wallet`,
+  `com.solanamobile.seedvaultimpl`, `app.phantom`, `ag.jup.jupiter.android`,
+  `com.android.systemui`, `com.android.keyguard`, `com.android.credentialmanager`,
+  `com.google.android.gms`. Explicitly **not a security boundary**: an unlisted wallet is
+  still fully visible. The README says so in those words.
+- **Capture**: one early return at the very top of `onAccessibilityEvent`, before any
+  `event.source` fetch and before anything is logged, so a protected package is never read,
+  never recorded, and never even named in a log line.
+- **Replay**: `findNodeWithRetry` checks `rootInActiveWindow.packageName` and, if protected,
+  recycles and returns a new `ReplayLookup.Skipped` **immediately** - it does not poll out the
+  3s timeout, since a protected window isn't a slow-rendering screen to wait for. `findNode`
+  is never called and `listClickableElements` never walks the tree, so nothing is read; and
+  because no node is ever returned from such a window, the `performAction(ACTION_CLICK)` call
+  is unreachable for it. Logs "Step N/M: skipped - <package> is protected. The tester never
+  reads or taps inside a wallet."
+- **Skipped is a third outcome**, not a pass and not a break: counted separately, new
+  `ReplayResult.FinishedWithSkips(completedSteps, skippedSteps, totalSteps)`, new pill states
+  `showProtected()` ("WALLET SCREEN - SKIPPED") and `showFinishedWithSkips()` ("REPLAY DONE -
+  N SKIPPED"), and a neutral grey "Replay finished with skipped steps" in the Last result card
+  rather than green. `StatusPill.render`'s `isError: Boolean` became a three-value `Tone`
+  (NORMAL/NEUTRAL/ERROR, the neutral being the palette's Dim White) specifically so a skip
+  can't render in the normal green and read as "fine". Copy Report inherits all of it through
+  the replay log, which already carries the skip lines.
+- **Both TEMPORARY `Log.d` lines removed** (the per-event diagnostic and the per-captured-step
+  one), their investigations being recorded as answered. `android.util.Log` is no longer
+  imported by the service. `RecorderBridge.appendLog`'s `Log.d("TesterReplayLog", ...)` is
+  unchanged and still the only logcat output.
+- **Site-4 read gated**: the `TYPE_VIEW_CLICKED` handler now returns early unless mode is
+  `RECORDING`, so the read surface matches what's actually used. `appendStep`'s own RECORDING
+  check is left in place as a redundant second gate.
+
+**This conflicts with must-have #3 and that conflict is now live.** Recognizing the four MWA
+states (wallet connect dialog, approval screen, rejection, insufficient funds) requires
+reading nodes inside the wallet app, which the strict guard forbids outright. Nothing is lost
+today - no flow has ever successfully recorded a wallet screen - but #3 cannot be built while
+this stands. The resolution, **deferred, not built**: split the two things the guard conflates
+into (a) never click inside a protected package, no exception, (b) never persist or log nodes
+from one, (c) may read transiently for recognition only, discarding the text. That keeps #3
+buildable while still guaranteeing the tester never taps a wallet and never writes wallet text
+to disk. Until that exists, the strict version stands.
+
+**Known limitation of the strict version**: because events from protected packages are dropped
+before anything is read, the tester cannot tell that a wallet is in the foreground *while
+recording* - so the pill keeps showing "REC - N steps" and simply captures nothing. There is no
+recording-time "WALLET SCREEN - NOT RECORDING" message, and there can't be one without
+weakening the early return. The skipped-step pill/message exists on the replay side only.
+
+Matching logic (`findNode`), saved flows, touch exploration handling, the watchdog, the
+volume-down stop, and all MWA/signing code are untouched. Capture and replay were changed
+under explicit authorization for this task.
+
+Build: `./gradlew :tester:assembleDebug` succeeds. Installed with `adb install -r`; service not
+started, nothing tapped.
+
+Needs an on-device pass: record normally and confirm flows still capture; open a wallet while
+recording and confirm nothing from it is captured and nothing appears in logcat for it; replay
+a flow whose window is a protected package and confirm the skip line, the neutral pill, and the
+neutral Last result card; confirm a clean replay still reads "REPLAY OK"/green.

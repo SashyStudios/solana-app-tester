@@ -51,8 +51,12 @@ class StatusPill(private val service: AccessibilityService) {
     // cancel the pulse dot's own repeating schedule, stopping it from pulsing further.
     private var pendingHide: Runnable? = null
 
+    /** Three tones rather than a plain error flag: a skipped/protected state is neither a
+     *  success nor a failure, and showing it in the normal green would read as "fine". */
+    private enum class Tone { NORMAL, NEUTRAL, ERROR }
+
     fun showCountdown(secondsRemaining: Int) {
-        render(line1Text = "STARTING IN $secondsRemaining", line2Text = null, isError = false)
+        render(line1Text = "STARTING IN $secondsRemaining", line2Text = null, tone = Tone.NORMAL)
     }
 
     /** showDetail controls the second line - callers show it only briefly (a few
@@ -68,28 +72,40 @@ class StatusPill(private val service: AccessibilityService) {
         } else {
             null
         }
-        render(line1Text = "REC - $stepCount steps", line2Text = detail, isError = false)
+        render(line1Text = "REC - $stepCount steps", line2Text = detail, tone = Tone.NORMAL)
     }
 
     fun showStopped(stepCount: Int) {
-        render(line1Text = "STOPPED - $stepCount steps", line2Text = null, isError = false)
+        render(line1Text = "STOPPED - $stepCount steps", line2Text = null, tone = Tone.NORMAL)
         scheduleHide(STOPPED_FADE_DELAY_MS)
     }
 
     fun showReplay(stepNumber: Int, totalSteps: Int, stepLabel: String) {
-        render(line1Text = "REPLAY - step $stepNumber/$totalSteps", line2Text = stepLabel, isError = false)
+        render(line1Text = "REPLAY - step $stepNumber/$totalSteps", line2Text = stepLabel, tone = Tone.NORMAL)
     }
 
     /** A replay break used to leave the pill showing "FLOW CHANGED" forever - it now
      *  fades out on its own, same as every other terminal pill state. */
     fun showBreak(stepNumber: Int) {
-        render(line1Text = "FLOW CHANGED - step $stepNumber", line2Text = null, isError = true)
+        render(line1Text = "FLOW CHANGED - step $stepNumber", line2Text = null, tone = Tone.ERROR)
         scheduleHide(BREAK_FADE_DELAY_MS)
     }
 
     /** A replay that completes every step without a break. */
     fun showFinished() {
-        render(line1Text = "REPLAY OK", line2Text = null, isError = false)
+        render(line1Text = "REPLAY OK", line2Text = null, tone = Tone.NORMAL)
+        scheduleHide(FINISHED_FADE_DELAY_MS)
+    }
+
+    /** A protected package owns the active window, so this step was skipped without
+     *  anything being read or tapped. Neutral, not green - nothing was verified here. */
+    fun showProtected() {
+        render(line1Text = "WALLET SCREEN - SKIPPED", line2Text = null, tone = Tone.NEUTRAL)
+    }
+
+    /** Terminal state for a replay that broke nothing but skipped at least one step. */
+    fun showFinishedWithSkips(skippedSteps: Int) {
+        render(line1Text = "REPLAY DONE - $skippedSteps SKIPPED", line2Text = null, tone = Tone.NEUTRAL)
         scheduleHide(FINISHED_FADE_DELAY_MS)
     }
 
@@ -117,7 +133,7 @@ class StatusPill(private val service: AccessibilityService) {
         dot = null
     }
 
-    private fun render(line1Text: String, line2Text: String?, isError: Boolean) {
+    private fun render(line1Text: String, line2Text: String?, tone: Tone) {
         // Starting a new state (countdown/recording/replay/stopped/finished/break)
         // clears any fade-out timer left over from whatever the pill showed before -
         // otherwise a stale showBreak()/showFinished() timer could later hide() this
@@ -130,7 +146,11 @@ class StatusPill(private val service: AccessibilityService) {
         // be visible, regardless of anything that may have faded it out before.
         rootView?.alpha = 1f
         rootView?.visibility = View.VISIBLE
-        val color = if (isError) ERROR_RED else ELECTRIC_GREEN
+        val color = when (tone) {
+            Tone.NORMAL -> ELECTRIC_GREEN
+            Tone.NEUTRAL -> DIM_WHITE
+            Tone.ERROR -> ERROR_RED
+        }
         line1?.text = line1Text
         line1?.setTextColor(color)
         line2?.text = line2Text
@@ -278,6 +298,8 @@ class StatusPill(private val service: AccessibilityService) {
     companion object {
         private const val ELECTRIC_GREEN = 0xFF00FF88.toInt()
         private const val ERROR_RED = 0xFFFF4444.toInt()
+        // Brand palette's Dim White - the neutral "nothing was verified here" tone.
+        private const val DIM_WHITE = 0xFF888888.toInt()
         private const val PILL_BACKGROUND_ALPHA = 140 // ~55% of 255
         private const val GLOW_ALPHA = 51 // ~20% of 255
         private const val DOT_PULSE_INTERVAL_MS = 1500L

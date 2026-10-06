@@ -22,7 +22,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -163,7 +165,14 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .padding(24.dp)
+            // Whole-screen scroll - needed once the saved-flows list (capped below, but
+            // still as tall as ~3 rows) plus everything else can exceed the viewport.
+            // Every list below has its own fixed height and scrolls internally instead
+            // of using weight(1f), since weight doesn't work against a scrolling parent
+            // (it measures children with bounded height, which a scrollable Column can't
+            // offer - it measures its content at its natural/unbounded height instead).
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
@@ -226,8 +235,15 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
         if (displayFlows.isEmpty()) {
             Text("No saved flows yet", color = SashyColors.DimWhite)
         } else {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                displayFlows.forEach { display ->
+            // Fixed height (~3 rows) with its own internal scroll, so a long list scrolls
+            // in place instead of pushing the rest of the screen down indefinitely.
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(170.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(displayFlows) { display ->
                     SavedFlowRow(
                         flow = display.flow,
                         ordinal = display.ordinal,
@@ -355,7 +371,11 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
+                // Was weight(1f) - doesn't work once the parent Column scrolls (a
+                // scrolling parent measures its content at natural height, so weight has
+                // no bounded space to divide). Fixed height with its own internal scroll
+                // instead, same pattern as the saved-flows and recorded-steps lists.
+                .height(200.dp)
                 .background(SashyColors.CardBlack, RoundedCornerShape(12.dp))
                 .border(1.dp, SashyColors.BorderGray, RoundedCornerShape(12.dp))
                 .padding(12.dp)

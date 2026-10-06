@@ -14,7 +14,7 @@ The users are developers building Solana Mobile apps. Every decision should serv
 - Safe by default: devnet only; warn or refuse if a real/mainnet wallet is involved.
 - Repeatable: the same flow gives the same result every run.
 - Fast to start: setup state and next step must be obvious on the main screen.
-- Shareable: results copyable as plain text (stretch, after core features).
+- Shareable: results copyable as plain text (done, see Status - "Copy report" button).
 When a design choice is unclear, choose what a developer would want to read in a bug report.
 
 ## Working relationship
@@ -282,8 +282,7 @@ Changed from the flat 60s timer described below (that version is what the "Verif
 - If the screen locks up: hold Power for about 10 seconds.
 
 ### STRETCH, only after one-finger record and replay is proven
-- Per-app saved recordings: one small JSON file per target package in app storage, plus a simple list screen where I pick an app and press Replay. Also fixes the current problems that a second recording overwrites the first and recordings are lost if the tester process dies. No cloud, no database, no multiple flows per app.
-- Full version (named flows, several per app, segments) goes in the pitch deck roadmap only.
+- Full version of saved flows (named flows, several per app, segments) goes in the pitch deck roadmap only - see Future ideas. Per-app saved recordings themselves are done, see Status below.
 
 ### Git
 - Repo is pushed: github.com/SashyStudios/solana-app-tester. Commit 9f0af0c (countdown) is local only. Commits use the GitHub noreply email. setup/skr-mint-authority.json must never be committed.
@@ -325,3 +324,23 @@ Same 7-step SeekShot flow gave different results run to run (1/7, 3/7). Investig
 Also implemented the minimal break explanation from CLAUDE.md's "Break explanations" section: on a failed step, log "expected \<name\>, not found", up to 5 currently-visible clickable elements (resourceId + label), and the closest match (same class) flagged as "Possibly renamed." The on-screen snapshot is walked and converted to plain data (`ClickableElement`, no `AccessibilityNodeInfo` reference) before the root it came from is recycled, each poll attempt, so nothing is ever read from a recycled node.
 
 Needs an on-device re-run of the same SeekShot flow to confirm: results are now consistent across repeated runs, a step that's merely slow (not actually broken) no longer falsely breaks, and a genuine break shows the new on-screen listing with a sensible closest-match flag.
+
+### Copy report (Oct 6, applied)
+A "Copy Report" button sits next to Replay. It copies plain text to the clipboard (`LocalClipboardManager`, no new permission) and shows a short "Report copied" confirmation (`Toast`): a header (target app package, date/time, Android release + API level), the recorded steps (number, name, package), and the full replay log. The "Recorded steps: N" line also got its own small "Copy" button that copies just the steps list in the same plain-text format - this was flagged as "if easy" and turned out to be a one-line reuse of the same formatting function, so it's in too.
+
+The report's "App" line uses the first recorded step's packageName (the target app being tested), not the tester's own package - that's the package a developer pasting this into a bug report would actually want to see.
+
+### Per-app saved flows (Oct 6, applied) - moved out of STRETCH
+One saved flow per target app, replacing "a second recording overwrites the first and recordings are lost if the tester process dies" with a real save/load/delete cycle. No named flows, no multiple flows per app, no cloud, no database - exactly the STRETCH item's original scope, now built against the one-finger record/replay path once it was proven working.
+
+- **Save**: `stopRecording()` (the one function every stop path - button, volume-down, watchdog - already funnels through) now saves the recording as JSON in the tester's own `filesDir` whenever it stops with at least one step. One file per target package (`flow_<packageName>.json`); re-recording the same app overwrites its file. New `SavedFlowStore` (`model/SavedFlow.kt`) owns the JSON read/write - built on `org.json` (already part of the Android SDK, no new dependency), not a database.
+- **Which package is "the target app"**: the most common `packageName` among the recorded steps, after excluding the device's current home/launcher app (resolved dynamically via `PackageManager.resolveActivity` on a HOME intent, not hardcoded, since the launcher package varies by device/OEM) and `com.android.systemui`. Could a launcher tap at the start confuse this? Only in the edge case of a very short recording - a single "tap the icon to open the app" step would only ever contribute one vote, so even without excluding the launcher it would rarely out-vote a real flow's many target-app taps; excluding it removes that edge case outright. It's still a frequency heuristic, not a guarantee - a recording that bounces through several non-launcher screens (e.g. an app-drawer search) before reaching the target could still be misread.
+- **Null fields**: every `RecordedStep` field that can be null is omitted from the JSON object entirely when null (rather than writing a JSON `null`) and read back via a small `has(name)` check - round-trips correctly either way.
+- **Format version**: every file carries `formatVersion: 1` so a future format change can recognize and handle (or deliberately reject) files written by this version instead of guessing.
+- **Load**: `MainActivity.onCreate` calls `RecorderBridge.loadSavedFlows(this)` - pure file I/O via `Context`, independent of whether the accessibility service is connected (enabling it is a separate manual step). A file that fails to parse is skipped, not crashed on.
+- **UI**: a "Saved flows" list sits directly below the Record button - app name (from `PackageManager`, falling back to the raw package name if it can't resolve, e.g. the app was since uninstalled), step count, saved time, "No saved flows yet" when the list is empty. Tapping a row loads it as the current in-memory recording (there's no separate "active flow" field - the active flow is just whichever saved flow's package matches what's currently loaded, same thing Replay/the step list/Copy Report already read from) and highlights it in green; tapping is disabled while recording/replaying. Each row has its own "Delete" with a confirmation dialog before anything is removed. Sashy styling throughout (`CardBlack` cards, `BorderGray`/`ElectricGreen` borders, 12dp corners, monospace labels).
+- **Package visibility**: replay needs to be able to launch *any* saved app, not just the two currently hardcoded in the manifest's `<queries>`. Added a `<queries><intent>` block with a MAIN/LAUNCHER action+category filter, which makes every ordinary launchable app visible to this tool's `PackageManager` calls (`getLaunchIntentForPackage` and friends) without needing the restricted `QUERY_ALL_PACKAGES` permission. This is the standard, Play-Store-safe mechanism for "see any app the user can launch," stable since Android 11 (API 30) introduced package visibility - I'm not aware of anything API 36 changes on top of it, but haven't verified that against a live PackageManager response on-device. The two existing `<package>` entries are now redundant for apps with a launcher icon but are left in as harmless documentation of what this tool currently targets.
+
+Needs an on-device pass: record a flow against SeekShot, confirm it saves and shows up in the list after a fresh launch, re-record to confirm overwrite, select/Replay/delete, and confirm replay can still launch SeekShot via the new `<queries>` entry.
+
+Capture logic, the watchdog's own timing/trigger logic, volume-down's handling, touch exploration, and all MWA/SKR/transaction code are untouched - the only shared function touched by this is `stopRecording()`, which gained a save-on-stop side effect but no change to when/why any stop path calls it.

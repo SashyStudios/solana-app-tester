@@ -4,12 +4,22 @@
     <!--
         Android 11+ package visibility: without this, PackageManager.getLaunchIntentForPackage
         returns null for another app even when it's installed, which replay() can't tell apart
-        from "not installed" - see the Oct 4 investigation. Wallet packages (Phantom, Solflare,
-        etc.) are deliberately not listed yet - add them when replay needs to launch a wallet.
+        from "not installed" - see the Oct 4 investigation. The MAIN/LAUNCHER intent query
+        (added Oct 6, for per-app saved flows) makes every ordinary launchable app visible,
+        covering any app a flow gets saved for without listing packages one at a time - the
+        two explicit <package> entries below are now redundant for apps with a launcher icon
+        but are left in place as harmless, explicit documentation of what this tool targets.
+        Wallet packages (Phantom, Solflare, etc.) are deliberately not listed yet - add them
+        when replay needs to launch a wallet directly (most wallet flows are reached via MWA's
+        own intent routing, not a direct launch, so they may not need an entry here at all).
     -->
     <queries>
         <package android:name="com.clockin.mwatestapp" />
         <package android:name="com.sashystudios.seekshot" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <application

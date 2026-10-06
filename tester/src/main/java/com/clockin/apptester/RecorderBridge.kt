@@ -1,7 +1,10 @@
 package com.clockin.apptester
 
+import android.content.Context
 import android.util.Log
 import com.clockin.apptester.model.RecordedStep
+import com.clockin.apptester.model.SavedFlow
+import com.clockin.apptester.model.SavedFlowStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,6 +34,9 @@ object RecorderBridge {
 
     private val _countdownSecondsRemaining = MutableStateFlow<Int?>(null)
     val countdownSecondsRemaining: StateFlow<Int?> = _countdownSecondsRemaining.asStateFlow()
+
+    private val _savedFlows = MutableStateFlow<List<SavedFlow>>(emptyList())
+    val savedFlows: StateFlow<List<SavedFlow>> = _savedFlows.asStateFlow()
 
     internal fun attachService(instance: RecordingAccessibilityService) {
         service = instance
@@ -109,6 +115,50 @@ object RecorderBridge {
         // anymore, so this is normally a no-op clearing an already-clear flag - kept
         // in case a flag got left on by an older build/session.
         service?.setTouchExplorationRequested(false)
+
+        // Save-on-stop: every stop path (button, volume-down, watchdog) funnels through
+        // here, so this one hook covers all three. Only when there's something to save -
+        // doesn't touch anything else in this function.
+        val steps = _recordedSteps.value
+        val svc = service
+        if (steps.isNotEmpty() && svc != null) {
+            val targetPackage = SavedFlowStore.determineTargetPackage(svc, steps)
+            if (targetPackage != null) {
+                svc.saveFlow(targetPackage, steps)
+                _savedFlows.value = SavedFlowStore.loadAll(svc)
+            } else {
+                appendLog("Couldn't determine which app this recording was for - not saved.")
+            }
+        }
+    }
+
+    /** Called once from MainActivity.onCreate - pure file I/O via Context, independent
+     *  of whether the accessibility service is connected yet. */
+    fun loadSavedFlows(context: Context) {
+        _savedFlows.value = SavedFlowStore.loadAll(context)
+    }
+
+    /** Loads a saved flow's steps as the current in-memory recording. There's no separate
+     *  "active flow" field - the active flow is simply whichever saved flow's packageName
+     *  matches recordedSteps.value's packageName, derived in the UI rather than tracked
+     *  twice. Clears the replay log too, so an old flow's results can't be mistaken for
+     *  this one's. Only while idle, so this can't clobber an in-progress recording or
+     *  replay. */
+    fun selectSavedFlow(flow: SavedFlow) {
+        if (_mode.value != RecorderMode.IDLE) return
+        _recordedSteps.value = flow.steps
+        _replayLog.value = emptyList()
+    }
+
+    /** If the deleted flow was the active one, clears it from the current in-memory
+     *  recording too - otherwise the step list/replay button would keep referencing a
+     *  flow that no longer has a file backing it. */
+    fun deleteSavedFlow(context: Context, flow: SavedFlow) {
+        SavedFlowStore.delete(context, flow.packageName)
+        _savedFlows.update { it.filterNot { f -> f.packageName == flow.packageName } }
+        if (_recordedSteps.value.firstOrNull()?.packageName == flow.packageName) {
+            _recordedSteps.value = emptyList()
+        }
     }
 
     /** Stop via the "Stop Recording" button or volume-down (not the watchdog, which

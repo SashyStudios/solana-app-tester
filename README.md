@@ -27,6 +27,23 @@ between recorded versions for the demo.
 See `CLAUDE.md` in the tester's own repo for the locked demo scenario
 (crash-on-rejection between version 1 and version 2 of this app).
 
+## Switching demo versions
+This app builds as two flavors, v1 and v2, sharing one applicationId so either
+can be installed over the other. Two scripts in `scripts\` install one or the
+other by hand, without needing to remember the adb command:
+
+- `scripts\install-demo-v1.bat`
+- `scripts\install-demo-v2.bat`
+
+Each resolves `adb.exe` itself (from `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`,
+falling back to `%ANDROID_HOME%\platform-tools\adb.exe` if set) and runs
+`adb install -r -d` on the matching debug APK
+(`app\build\outputs\apk\v1\debug\` or `\v2\debug\`). If that APK hasn't been
+built yet, the script says so and tells you which Gradle task to run
+(`gradlew :app:assembleV1Debug` or `:app:assembleV2Debug`) instead of failing
+unexplained. Either script installs only the demo app - never the tester, and
+never an uninstall.
+
 ## Status
 Built specifically for hackathon submission (deadline Oct 8, 2026). No plans to
 maintain or publish beyond that.

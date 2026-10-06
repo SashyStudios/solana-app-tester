@@ -50,6 +50,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.clockin.apptester.model.RecordedStep
 import com.clockin.apptester.model.ReplayResult
 import com.clockin.apptester.model.SavedFlow
@@ -525,13 +526,16 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
     }
 }
 
-/** One row per saved flow - "<name> | <step count> steps | <date time>", where <name> is
- *  the flow's stored name if it's been renamed, else the same "<App name> #N" default as
- *  before (see displayNameFor; #N is this flow's ordinal within its own app's group, see
- *  buildFlowDisplayList). Tapping the row makes it the active flow (green highlight);
- *  "Rename" opens a text dialog pre-filled with the current name; "Delete" asks for
- *  confirmation before removing anything - every other flow, including other recordings
- *  of the same app, is left alone by either action. */
+/** One row per saved flow, stacked top to bottom so the name and step/time line each get
+ *  the card's full width instead of squeezing into a narrow column beside Rename/Delete:
+ *  the name (bold, green when active), a dimmed "<N> steps | <date time>" line, then a
+ *  compact action row. <name> is the flow's stored name if it's been renamed, else the
+ *  same "<App name> #N" default as before (see displayNameFor; #N is this flow's ordinal
+ *  within its own app's group, see buildFlowDisplayList). Tapping anywhere on the card
+ *  (outside the two buttons) makes it the active flow (green border); "Rename" opens a
+ *  text dialog pre-filled with the current name; "Delete" asks for confirmation before
+ *  removing anything - every other flow, including other recordings of the same app, is
+ *  left alone by either action. */
 @Composable
 private fun SavedFlowRow(
     flow: SavedFlow,
@@ -547,7 +551,7 @@ private fun SavedFlowRow(
     val savedTime = remember(flow.savedAtEpochMillis) { formatSavedTime(flow.savedAtEpochMillis) }
     val borderColor = if (isActive) SashyColors.ElectricGreen else SashyColors.BorderGray
 
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
@@ -555,20 +559,30 @@ private fun SavedFlowRow(
             .border(1.dp, borderColor, RoundedCornerShape(12.dp))
             .clickable(enabled = enabled, onClick = onSelect)
             .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         Text(
-            "$displayName | ${flow.steps.size} steps | $savedTime",
-            modifier = Modifier.weight(1f),
+            displayName,
+            modifier = Modifier.fillMaxWidth(),
+            fontSize = 14.sp,
             fontFamily = FontFamily.Monospace,
-            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+            fontWeight = FontWeight.Bold,
             color = if (isActive) SashyColors.ElectricGreen else SashyColors.White
         )
-        TextButton(onClick = onRenameRequested) {
-            Text("Rename", color = SashyColors.ElectricGreen)
-        }
-        TextButton(onClick = onDeleteRequested) {
-            Text("Delete", color = SashyColors.ErrorRed)
+        Text(
+            "${flow.steps.size} steps | $savedTime",
+            modifier = Modifier.fillMaxWidth(),
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            color = SashyColors.DimWhite
+        )
+        Row {
+            TextButton(onClick = onRenameRequested) {
+                Text("Rename", fontSize = 12.sp, color = SashyColors.ElectricGreen)
+            }
+            TextButton(onClick = onDeleteRequested) {
+                Text("Delete", fontSize = 12.sp, color = SashyColors.ErrorRed)
+            }
         }
     }
 }

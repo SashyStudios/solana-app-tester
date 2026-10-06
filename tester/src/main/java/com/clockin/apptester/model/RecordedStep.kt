@@ -41,3 +41,23 @@ fun RecordedStep.postTapDetail(): String? {
     val postTap = text ?: contentDescription
     return postTap?.takeIf { it != primaryLabel() }
 }
+
+/** True when nothing distinguishes this step at all - no resourceId, and no text or
+ *  contentDescription in either their pre-tap or post-tap form. findNode()'s three-tier
+ *  match (resourceId, pre-tap text, post-tap text) has nothing to go on for a step like
+ *  this, so replay can only ever ride on step ordering plus whatever's drawn at that
+ *  position - it isn't actually finding this element by any identity. See CLAUDE.md
+ *  status, "Unlabeled step warning". */
+fun RecordedStep.hasNoIdentity(): Boolean =
+    resourceId == null && text == null && contentDescription == null &&
+        preTapText == null && preTapContentDescription == null
+
+/** Shared wording for the "N steps have no ID or label" warning, used identically by
+ *  the step list, Copy Report, and the stop-recording log line - null when there's
+ *  nothing to warn about. */
+fun List<RecordedStep>.unlabeledStepWarning(): String? {
+    val count = count { it.hasNoIdentity() }
+    if (count == 0) return null
+    return "⚠ $count steps have no ID or label. Replay can't find them reliably. " +
+        "Add a contentDescription or resource ID to these controls."
+}

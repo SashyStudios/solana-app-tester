@@ -9,6 +9,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.clockin.apptester.model.RecordedStep
 import com.clockin.apptester.model.SavedFlowStore
+import com.clockin.apptester.model.hasNoIdentity
 import com.clockin.apptester.model.primaryLabel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -314,7 +315,13 @@ class RecordingAccessibilityService : AccessibilityService() {
 
                 val remainingSeconds = minOf(inactivityRemainingMs, hardCapRemainingMs) / 1000
                 val showDetail = now - lastCapturedAtMs < STEP_DETAIL_VISIBLE_MS
-                statusPill.showRecording(steps.size, steps.lastOrNull()?.primaryLabel(), remainingSeconds, showDetail)
+                // Display text only - see RecordedStep.hasNoIdentity(). Does not change any
+                // of the watchdog's own timing/trigger logic above (inactivity reset, hard
+                // cap, force-stop) or the loop's own cadence.
+                val lastStepLabel = steps.lastOrNull()?.let { step ->
+                    if (step.hasNoIdentity()) "⚠ ${step.primaryLabel()}" else step.primaryLabel()
+                }
+                statusPill.showRecording(steps.size, lastStepLabel, remainingSeconds, showDetail)
                 delay(1000L)
             }
             recordingStatusTicker = null

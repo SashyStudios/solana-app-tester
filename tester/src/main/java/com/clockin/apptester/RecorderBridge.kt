@@ -5,6 +5,7 @@ import android.util.Log
 import com.clockin.apptester.model.RecordedStep
 import com.clockin.apptester.model.SavedFlow
 import com.clockin.apptester.model.SavedFlowStore
+import com.clockin.apptester.model.unlabeledStepWarning
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -130,6 +131,7 @@ object RecorderBridge {
                 appendLog("Couldn't determine which app this recording was for - not saved.")
             }
         }
+        steps.unlabeledStepWarning()?.let { appendLog(it) }
     }
 
     /** Called once from MainActivity.onCreate - pure file I/O via Context, independent

@@ -344,3 +344,19 @@ One saved flow per target app, replacing "a second recording overwrites the firs
 Needs an on-device pass: record a flow against SeekShot, confirm it saves and shows up in the list after a fresh launch, re-record to confirm overwrite, select/Replay/delete, and confirm replay can still launch SeekShot via the new `<queries>` entry.
 
 Capture logic, the watchdog's own timing/trigger logic, volume-down's handling, touch exploration, and all MWA/SKR/transaction code are untouched - the only shared function touched by this is `stopRecording()`, which gained a save-on-stop side effect but no change to when/why any stop path calls it.
+
+### Saved SeekShot flow read, read-only (Oct 6)
+Read the saved flow file directly (`adb shell run-as com.clockin.apptester cat files/flow_com.sashystudios.seekshot.json`) to answer a question about steps 4-8 of the 9-step recording. All five are plain `android.widget.TextView` with only a `text` value ("Action", "Video", "Wide", "Wide", "Photo") - no resourceId, no contentDescription, no preTapText, immediately after two taps on `scenesButton`. Read as list items in a horizontal scene-picker strip: no resourceId because the item layout likely never assigns one (or the view is built programmatically, not inflated from XML); no contentDescription because a plain TextView's own text already satisfies TalkBack by default, so there was no accessibility reason to add one. `RecordedStep` has no bounds field, so "bounds if stored" doesn't apply - nothing was lost, there was never anywhere to put it. Steps 6-7 share the identical text "Wide" - can't tell from this data alone whether that's two distinct items with the same label, a RecyclerView recycling artifact, or a genuine double-tap.
+
+### Unlabeled step warning (Oct 6, applied)
+A step with no resourceId and no text/contentDescription in either pre-tap or post-tap form (`RecordedStep.hasNoIdentity()`) has nothing for `findNode()`'s three-tier match to go on at all - replay can only ride on step ordering plus whatever happens to be drawn at that position, not any real identity. None of the SeekShot flow's current steps actually trigger this (all have at least a post-tap `text`) - this is a general safety net, not a response to a defect found above.
+
+Where it shows, all using the same shared wording (`List<RecordedStep>.unlabeledStepWarning()`, "⚠ N steps have no ID or label. Replay can't find them reliably. Add a contentDescription or resource ID to these controls."):
+- A "⚠ " prefix before the affected step's label in the step list, in Copy Report's steps section, and in Copy's steps-only text.
+- The full summary line under the step list (red, matching the brand palette's only warning-adjacent color) and in Copy Report, right after the steps section - not in the steps-only Copy text, which stays exactly the original per-step format.
+- The pill's "last: <label>" line gets the same "⚠ " prefix when the most recently captured step has no identity.
+- Logged once (not per-step) via `RecorderBridge.appendLog()` when recording stops, if any step qualifies.
+
+One of these four touches a line inside `startRecordingStatusTicker()`, the function this file documents as owning the recording watchdog - flagging this explicitly since "don't touch the watchdog" was repeated as an instruction for this change. The edit is one line, changing only what string gets passed to `statusPill.showRecording()` for the last-step label; the watchdog's own timing and trigger logic (the inactivity reset, the hard cap, the force-stop branch, the loop's cadence) is byte-for-byte unchanged. Flagging it rather than deciding silently that "display text" was an acceptable reading of "don't touch."
+
+Capture logic, `findNode()`'s matching, the watchdog's timing/trigger logic, volume-down, and touch exploration are otherwise untouched; no MWA/SKR/transaction code touched.

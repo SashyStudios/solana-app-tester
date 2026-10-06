@@ -48,8 +48,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.clockin.apptester.model.RecordedStep
 import com.clockin.apptester.model.SavedFlow
+import com.clockin.apptester.model.hasNoIdentity
 import com.clockin.apptester.model.postTapDetail
 import com.clockin.apptester.model.primaryLabel
+import com.clockin.apptester.model.unlabeledStepWarning
 import com.clockin.apptester.ui.theme.SashyColors
 import com.clockin.apptester.ui.theme.SashyTheme
 import java.time.Instant
@@ -94,8 +96,10 @@ private fun buildStepsReportText(steps: List<RecordedStep>): String =
     if (steps.isEmpty()) {
         "(no recorded steps)"
     } else {
-        steps.mapIndexed { index, step -> "${index + 1}. ${step.primaryLabel()} | ${step.packageName}" }
-            .joinToString("\n")
+        steps.mapIndexed { index, step ->
+            val warning = if (step.hasNoIdentity()) "⚠ " else ""
+            "${index + 1}. $warning${step.primaryLabel()} | ${step.packageName}"
+        }.joinToString("\n")
     }
 
 /** Full plain-text report for "Copy report": header (target app, date/time, Android
@@ -112,6 +116,7 @@ private fun buildFullReportText(steps: List<RecordedStep>, log: List<String>): S
         appendLine()
         appendLine("-- Recorded steps (${steps.size}) --")
         appendLine(buildStepsReportText(steps))
+        steps.unlabeledStepWarning()?.let { appendLine(it) }
         appendLine()
         appendLine("-- Replay log --")
         append(if (log.isEmpty()) "(no replay yet)" else log.joinToString("\n"))
@@ -262,13 +267,21 @@ private fun TesterScreen(onOpenAccessibilitySettings: () -> Unit) {
                 itemsIndexed(steps) { index, step ->
                     val postTap = step.postTapDetail()
                     val suffix = if (postTap != null) " (shows \"$postTap\" after tap)" else ""
+                    val warning = if (step.hasNoIdentity()) "⚠ " else ""
                     Text(
-                        "${index + 1}. ${step.primaryLabel()} | ${step.packageName}$suffix",
+                        "${index + 1}. $warning${step.primaryLabel()} | ${step.packageName}$suffix",
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                         color = SashyColors.ElectricGreen
                     )
                 }
+            }
+            steps.unlabeledStepWarning()?.let { warning ->
+                Text(
+                    warning,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SashyColors.ErrorRed
+                )
             }
         }
 

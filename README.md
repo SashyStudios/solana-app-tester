@@ -47,6 +47,15 @@ It replaces the part where I re-tap the same flow by hand.
 - WebView content is untested. A web page inside an app reaches accessibility as
   virtual nodes built from the page, not as Android views, so resource IDs may be
   missing there and matching or clicking inside a WebView is unverified.
+- Web apps opened in Chrome are recorded as Chrome, and replay can't reopen the
+  page. Roadmap: record the page URL and relaunch it.
+- Controls that don't use standard Android click handling (Jetpack Compose
+  screens, and possibly custom-drawn views and games) don't send a click event,
+  so they can't be recorded automatically. Taps that navigate to a new screen are
+  recorded from the tap event's own details when the tapped element is already
+  gone. Replay always starts from the app's launch screen and doesn't scroll, so
+  apps whose screens depend on state (opening hours, login, scroll position) can
+  show a different screen on replay.
 - Replay performs the real actions it recorded — real taps, on the real app.
   It is not a simulation.
 - Wallet-state detection (connect dialog, approval screen, rejection,
@@ -109,7 +118,8 @@ To see the tester catch a break:
   credential screens are on a protected list: the tester drops their events without
   reading or recording anything on screen, and replay skips any step whose screen
   belongs to one rather than tapping it. Recording will not start, and a recording in
-  progress is stopped with a message, if a protected app is in the foreground or the
+  progress is stopped with a message, if a protected app (including Phantom,
+  Solflare, Jupiter and the Solana Mobile wallet) is in the foreground or the
   lock screen is showing. Only the app's package name is ever written to the log in
   those cases. The protected-app list covers known wallets and system screens only.
   An unlisted app is still fully visible.

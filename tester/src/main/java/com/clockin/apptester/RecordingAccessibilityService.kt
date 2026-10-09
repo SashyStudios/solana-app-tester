@@ -73,7 +73,7 @@ class RecordingAccessibilityService : AccessibilityService() {
         // Password nodes: text and contentDescription are never read (isPassword is the only
         // thing looked at). Their children, if any, are still walked.
         if (node.isClickable && !node.isPassword) {
-            node.viewIdResourceName?.let { resourceId ->
+            node.viewIdResourceName?.takeIf { it.isNotEmpty() }?.let { resourceId ->
                 observeLabel(packageName, resourceId, node.text?.toString(), node.contentDescription?.toString())
             }
         }
@@ -162,7 +162,7 @@ class RecordingAccessibilityService : AccessibilityService() {
                 val pkg = event.packageName?.toString()
                 if (pkg != null && pkg != packageName) {
                     val src = event.source
-                    val resId = src?.viewIdResourceName
+                    val resId = src?.viewIdResourceName?.takeIf { it.isNotEmpty() }
                     // isPassword is checked before text/contentDescription are touched.
                     if (resId != null && src != null && !src.isPassword) {
                         observeLabel(pkg, resId, src.text?.toString(), src.contentDescription?.toString())
@@ -183,13 +183,34 @@ class RecordingAccessibilityService : AccessibilityService() {
         // service has no packageNames filter so it can later see into the wallet app,
         // but that means our own controls would otherwise get recorded as steps too.
         if (event.packageName?.toString() == packageName) return
-        val source = event.source ?: return
-        val stepPackageName = event.packageName?.toString()
-        if (stepPackageName == null) {
-            source.recycle()
+        val stepPackageName = event.packageName?.toString() ?: return
+        val source = event.source
+        if (source == null) {
+            // A tap that navigates can leave no source node behind (the tapped view is
+            // already gone by the time the event is delivered). Build the step from the
+            // event's own fields instead of dropping it. Same password filter as below.
+            if (event.isPassword) return
+            val eventText = event.text.firstOrNull { !it.isNullOrEmpty() }?.toString()
+            val eventDescription = event.contentDescription?.toString()?.takeIf { it.isNotEmpty() }
+            val eventClass = event.className?.toString()?.takeIf { it.isNotBlank() }
+            if (eventClass == null && eventText == null && eventDescription == null) {
+                RecorderBridge.countUnrecordedTap()
+                return
+            }
+            RecorderBridge.appendStep(
+                RecordedStep(
+                    packageName = stepPackageName,
+                    className = eventClass,
+                    resourceId = null,
+                    text = eventText,
+                    contentDescription = eventDescription,
+                    preTapText = null,
+                    preTapContentDescription = null
+                )
+            )
             return
         }
-        val resourceId = source.viewIdResourceName
+        val resourceId = source.viewIdResourceName?.takeIf { it.isNotEmpty() }
         val history = resourceId?.let { labelCache["$stepPackageName/$it"] }
         val preTap = history?.previous ?: history?.current
         // A password field's tap is still recorded (class, resource ID), but its text and
@@ -537,7 +558,8 @@ class RecordingAccessibilityService : AccessibilityService() {
     private data class ClickableElement(val resourceId: String?, val label: String, val className: String?) {
         /** Worth showing a developer: has an id or a real label. An element with neither
          *  is just noise in a break explanation. */
-        val isListable: Boolean get() = resourceId != null || (label.isNotBlank() && label != UNLABELED)
+        val isListable: Boolean
+            get() = (resourceId != null || (label.isNotBlank() && label != UNLABELED)) && label != resourceId
     }
 
     /**
@@ -686,11 +708,12 @@ class RecordingAccessibilityService : AccessibilityService() {
         if (node.isClickable) {
             // Password nodes: text and contentDescription are never read - the label falls
             // straight through to the resource ID.
+            val resourceId = node.viewIdResourceName?.takeIf { it.isNotEmpty() }
             val label = (if (node.isPassword) null else node.text?.toString())
                 ?: (if (node.isPassword) null else node.contentDescription?.toString())
-                ?: node.viewIdResourceName
+                ?: resourceId
                 ?: UNLABELED
-            into.add(ClickableElement(node.viewIdResourceName, label, node.className?.toString()))
+            into.add(ClickableElement(resourceId, label, node.className?.toString()))
         }
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue

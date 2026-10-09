@@ -70,6 +70,16 @@ object RecorderBridge {
         }
     }
 
+    // Clicks seen while recording that carried too little to become a step (no source
+    // node, no class, no text). Reset when a new recording starts; shown in the step
+    // list and the stopped pill so the gap is stated, not hidden.
+    private val _unrecordedTaps = MutableStateFlow(0)
+    val unrecordedTaps: StateFlow<Int> = _unrecordedTaps.asStateFlow()
+
+    internal fun countUnrecordedTap() {
+        if (_mode.value == RecorderMode.RECORDING) _unrecordedTaps.update { it + 1 }
+    }
+
     internal fun appendLog(line: String) {
         _replayLog.update { it + line }
         // Also goes to logcat (tag TesterReplayLog) - the in-app Replay Log list is
@@ -113,6 +123,7 @@ object RecorderBridge {
             return
         }
         _recordedSteps.value = emptyList()
+        _unrecordedTaps.value = 0
         // A new, not-yet-saved recording doesn't correspond to any existing saved flow -
         // clear which one was highlighted so nothing stale stays marked active.
         _activeFlowId.value = null
@@ -169,7 +180,12 @@ object RecorderBridge {
             }
         }
         steps.unlabeledStepWarning()?.let { appendLog(it) }
+        unrecordedTapsMessage(_unrecordedTaps.value)?.let { appendLog(it) }
     }
+
+    /** Shared wording for taps that were seen but could not become a step. */
+    fun unrecordedTapsMessage(count: Int): String? =
+        if (count > 0) "$count taps seen but not recorded" else null
 
     /** Called once from MainActivity.onCreate - pure file I/O via Context, independent
      *  of whether the accessibility service is connected yet. */
@@ -214,7 +230,7 @@ object RecorderBridge {
      *  "STOPPED - N steps" pill, which fades on its own a few seconds later. */
     fun stopRecordingManually() {
         stopRecording()
-        service?.statusPill?.showStopped(_recordedSteps.value.size)
+        service?.statusPill?.showStopped(_recordedSteps.value.size, unrecordedTapsMessage(_unrecordedTaps.value))
     }
 
     fun startReplay() {

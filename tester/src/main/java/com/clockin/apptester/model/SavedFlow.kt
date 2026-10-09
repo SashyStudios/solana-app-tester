@@ -153,7 +153,7 @@ object SavedFlowStore {
     private fun JSONObject.toRecordedStep(): RecordedStep = RecordedStep(
         packageName = getString("packageName"),
         className = optNullableString("className"),
-        resourceId = optNullableString("resourceId"),
+        resourceId = optNullableString("resourceId")?.takeIf { it.isNotEmpty() },
         text = optNullableString("text"),
         contentDescription = optNullableString("contentDescription"),
         preTapText = optNullableString("preTapText"),

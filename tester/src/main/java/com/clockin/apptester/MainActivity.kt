@@ -183,6 +183,7 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
     val mode by RecorderBridge.mode.collectAsState()
     val steps by RecorderBridge.recordedSteps.collectAsState()
     val log by RecorderBridge.replayLog.collectAsState()
+    val unrecordedTaps by RecorderBridge.unrecordedTaps.collectAsState()
     val countdown by RecorderBridge.countdownSecondsRemaining.collectAsState()
     val savedFlows by RecorderBridge.savedFlows.collectAsState()
     val activeFlowId by RecorderBridge.activeFlowId.collectAsState()
@@ -438,6 +439,13 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
                     color = SashyColors.ErrorRed
                 )
             }
+        }
+        RecorderBridge.unrecordedTapsMessage(unrecordedTaps)?.let { note ->
+            Text(
+                note,
+                style = MaterialTheme.typography.bodySmall,
+                color = SashyColors.DimWhite
+            )
         }
 
         Row(

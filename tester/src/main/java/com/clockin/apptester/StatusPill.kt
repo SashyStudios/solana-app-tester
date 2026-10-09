@@ -75,8 +75,8 @@ class StatusPill(private val service: AccessibilityService) {
         render(line1Text = "REC - $stepCount steps", line2Text = detail, tone = Tone.NORMAL)
     }
 
-    fun showStopped(stepCount: Int) {
-        render(line1Text = "STOPPED - $stepCount steps", line2Text = null, tone = Tone.NORMAL)
+    fun showStopped(stepCount: Int, unrecordedNote: String? = null) {
+        render(line1Text = "STOPPED - $stepCount steps", line2Text = unrecordedNote, tone = Tone.NORMAL)
         scheduleHide(STOPPED_FADE_DELAY_MS)
     }
 

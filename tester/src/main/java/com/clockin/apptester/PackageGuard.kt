@@ -30,6 +30,7 @@ object PackageGuard {
         "com.debank.rabbymobile",
         "com.coinbase.android",
         "org.toshi",
+        "com.solflare.mobile",
         "com.android.keyguard",
         "com.android.credentialmanager",
         "com.google.android.gms"

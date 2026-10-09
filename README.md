@@ -33,6 +33,13 @@ It replaces the part where I re-tap the same flow by hand.
   step captured, auto-stop countdown, pass/fail state.
 - Copy report: a plain-text summary (target app, device info, recorded steps,
   full replay log) ready to paste into a bug report.
+- Connects a devnet wallet over Mobile Wallet Adapter, and can sign a replay
+  result on devnet: the tester hashes the result with SHA-256 and publishes just
+  that hash as an SPL Memo transaction, giving you a timestamped, verifiable
+  record that a specific flow passed or failed. The signature, the hash, a devnet
+  explorer link and the exact string that was hashed are all shown, so anyone can
+  recompute the hash and check it. You approve every signature by hand in your
+  wallet.
 - A throwaway demo app (two build flavors, v1 and v2) that plants a real
   break — a button's resource ID and label both change between versions — so
   the tester has something concrete to catch.
@@ -110,9 +117,15 @@ To see the tester catch a break:
 
 - **Recordings stay on your device.** Flows are saved as JSON in the app's own
   private internal storage. There is no cloud sync, no account, and no database.
-- **Nothing is sent anywhere.** The tester makes no network calls. Wallet connect
-  talks to the wallet app over a local socket on the device, and sends only this
-  app's name and the cluster — never your recorded steps, screen labels or reports.
+- **What leaves the device.** The tester talks to two things only: the Solana devnet
+  RPC endpoint and the wallet app on this device. Wallet connect goes over a local
+  socket and sends only this app's name and the cluster. Nothing else is uploaded
+  anywhere — your recorded steps, screen labels and reports are never sent.
+- **What goes on chain.** Only when you tap "Sign result on devnet" and approve it in
+  your wallet. The on-chain memo is a public SHA-256 hash of the report and nothing
+  else — no app names, no element labels, no steps. A hash can't be reversed, but
+  anyone holding the same report can confirm it matches. Devnet is a public chain, so
+  treat the hash and your test wallet's address as public.
 - **What a recording contains.** For each step you tap: the app's package name, the
   view's class, its resource ID, and its visible label (text or contentDescription).
   No screenshots, no coordinates, no typed text.

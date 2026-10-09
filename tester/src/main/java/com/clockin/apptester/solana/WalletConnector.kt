@@ -39,7 +39,9 @@ object WalletConnector {
         identityName = "Solana App Tester"
     )
 
-    private val adapter = MobileWalletAdapter(identity).apply {
+    /** Internal, not private: ReportSigner reuses this same adapter (and therefore the
+     *  same authorization/auth token) rather than starting a second session of its own. */
+    internal val adapter = MobileWalletAdapter(identity).apply {
         // Also the library default; set explicitly so the cluster is stated in code, not assumed.
         blockchain = DevnetConfig.CLUSTER
     }

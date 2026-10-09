@@ -60,7 +60,11 @@ import com.clockin.apptester.model.hasNoIdentity
 import com.clockin.apptester.model.postTapDetail
 import com.clockin.apptester.model.primaryLabel
 import com.clockin.apptester.model.unlabeledStepWarning
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.style.TextDecoration
 import com.clockin.apptester.solana.DevnetConfig
+import com.clockin.apptester.solana.ReportSigner
+import com.clockin.apptester.solana.SignedProof
 import com.clockin.apptester.solana.WalletConnection
 import com.clockin.apptester.solana.WalletConnector
 import com.clockin.apptester.solana.WalletMessage
@@ -172,7 +176,25 @@ private fun buildFlowDisplayList(savedFlows: List<SavedFlow>): List<DisplayFlow>
  *  data already on screen, just as text someone can paste into a bug report or a Discord
  *  message. flowName is null when there's no active saved flow (e.g. an unsaved
  *  recording), falling back to the raw target package. */
-private fun buildFullReportText(steps: List<RecordedStep>, log: List<String>, flowName: String?): String {
+/** Plain text for "Copy proof": everything someone needs to recompute the hash
+ *  themselves and look the transaction up, nothing they'd have to take on trust. */
+private fun buildProofText(proof: SignedProof): String = buildString {
+    appendLine("=== Solana App Tester devnet proof ===")
+    appendLine("Cluster: devnet")
+    appendLine("Signature: ${proof.signature}")
+    appendLine("Explorer: ${proof.explorerUrl}")
+    appendLine("SHA-256 (the on-chain memo): ${proof.hash}")
+    appendLine()
+    appendLine("-- Exact string that was hashed --")
+    append(proof.canonical)
+}
+
+private fun buildFullReportText(
+    steps: List<RecordedStep>,
+    log: List<String>,
+    flowName: String?,
+    proof: SignedProof?
+): String {
     val now = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").format(LocalDateTime.now())
     val appLabel = flowName ?: steps.firstOrNull()?.packageName ?: "(none)"
     return buildString {
@@ -188,6 +210,15 @@ private fun buildFullReportText(steps: List<RecordedStep>, log: List<String>, fl
         appendLine()
         appendLine("-- Replay log --")
         append(if (log.isEmpty()) "(no replay yet)" else log.joinToString("\n"))
+        // Only ever present when a signature actually came back from the wallet.
+        proof?.let {
+            appendLine()
+            appendLine()
+            appendLine("-- Signed on devnet --")
+            appendLine("Signature: ${it.signature}")
+            appendLine("SHA-256 (the on-chain memo): ${it.hash}")
+            append("Explorer: ${it.explorerUrl}")
+        }
     }
 }
 
@@ -208,6 +239,9 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
     val walletConnection by WalletConnector.connection.collectAsState()
     val walletBusy by WalletConnector.requestInProgress.collectAsState()
     val walletMessage by WalletConnector.message.collectAsState()
+    val signing by ReportSigner.inProgress.collectAsState()
+    val signMessage by ReportSigner.message.collectAsState()
+    val proof by ReportSigner.lastProof.collectAsState()
     var flowPendingDelete by remember { mutableStateOf<SavedFlow?>(null) }
     var flowPendingRename by remember { mutableStateOf<SavedFlow?>(null) }
     var showFirstRunNotice by remember { mutableStateOf(false) }
@@ -274,7 +308,7 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
             onClick = startButtonAction,
             // Also disabled while a wallet request is open: a wallet window is in the
             // foreground then, and nothing else should start against it.
-            enabled = serviceConnected && mode != RecorderMode.REPLAYING && !walletBusy,
+            enabled = serviceConnected && mode != RecorderMode.REPLAYING && !walletBusy && !signing,
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(
@@ -293,7 +327,32 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
             message = walletMessage,
             connectEnabled = mode == RecorderMode.IDLE && !walletBusy,
             onConnect = { scope.launch { WalletConnector.connect(sender) } },
-            onDisconnect = { scope.launch { WalletConnector.disconnect(sender) } }
+            onDisconnect = { scope.launch { WalletConnector.disconnect(sender) } },
+            signing = signing,
+            signMessage = signMessage,
+            proof = proof,
+            // A result must exist to hash: there is nothing to sign before a replay has run.
+            signEnabled = walletConnection != null && mode == RecorderMode.IDLE &&
+                !walletBusy && !signing && lastResult != null,
+            onSign = {
+                val result = lastResult
+                val target = steps.firstOrNull()?.packageName
+                if (result != null && target != null) {
+                    scope.launch {
+                        ReportSigner.signResult(
+                            sender = sender,
+                            flowName = activeFlowName ?: "(unsaved recording)",
+                            targetPackage = target,
+                            steps = steps,
+                            result = result
+                        )
+                    }
+                }
+            },
+            onCopyProof = { signedProof ->
+                clipboardManager.setText(AnnotatedString(buildProofText(signedProof)))
+                Toast.makeText(context, "Proof copied", Toast.LENGTH_SHORT).show()
+            }
         )
 
         lastResult?.let { result ->
@@ -479,7 +538,7 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
             Button(
                 onClick = { RecorderBridge.startReplay() },
                 enabled = serviceConnected && mode == RecorderMode.IDLE &&
-                    steps.isNotEmpty() && !walletBusy,
+                    steps.isNotEmpty() && !walletBusy && !signing,
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -494,7 +553,9 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
 
             Button(
                 onClick = {
-                    clipboardManager.setText(AnnotatedString(buildFullReportText(steps, log, activeFlowName)))
+                    clipboardManager.setText(
+                        AnnotatedString(buildFullReportText(steps, log, activeFlowName, proof))
+                    )
                     Toast.makeText(context, "Report copied", Toast.LENGTH_SHORT).show()
                 },
                 modifier = Modifier.weight(1f),
@@ -635,10 +696,9 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
 }
 
 /**
- * Stage 1 of the MWA feature: authorize against devnet and show what connected. No
- * transactions, no signing - those come later. The cluster is on screen as a badge rather
- * than implied, because "which network am I on" is the one thing nobody should have to
- * infer from a wallet screen.
+ * Devnet wallet connect (Stage 1) plus signing a replay result as an on-chain memo
+ * (Stage 2). The cluster is on screen as a badge rather than implied, because "which
+ * network am I on" is the one thing nobody should have to infer from a wallet screen.
  *
  * Nothing here ever drives the wallet app itself: the person taps approve in the wallet by
  * hand. The accessibility service is not involved in this card at all.
@@ -650,8 +710,15 @@ private fun WalletCard(
     message: WalletMessage?,
     connectEnabled: Boolean,
     onConnect: () -> Unit,
-    onDisconnect: () -> Unit
+    onDisconnect: () -> Unit,
+    signing: Boolean,
+    signMessage: WalletMessage?,
+    proof: SignedProof?,
+    signEnabled: Boolean,
+    onSign: () -> Unit,
+    onCopyProof: (SignedProof) -> Unit
 ) {
+    val uriHandler = LocalUriHandler.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -762,6 +829,80 @@ private fun WalletCard(
                 )
             ) {
                 Text("Disconnect")
+            }
+
+            Button(
+                onClick = onSign,
+                enabled = signEnabled,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SashyColors.SolanaPurple,
+                    contentColor = SashyColors.White,
+                    disabledContainerColor = SashyColors.BorderGray,
+                    disabledContentColor = SashyColors.DimWhite
+                )
+            ) {
+                Text(if (signing) "Waiting for your approval..." else "Sign result on devnet")
+            }
+            Text(
+                "Publishes only a SHA-256 hash of the last replay result. Approve it by hand " +
+                    "in your wallet.",
+                fontSize = 11.sp,
+                color = SashyColors.DimWhite
+            )
+
+            signMessage?.let {
+                Text(
+                    it.text,
+                    fontSize = 12.sp,
+                    color = if (it.isError) SashyColors.ErrorRed else SashyColors.DimWhite
+                )
+            }
+
+            // Only ever rendered from a signature the wallet actually returned.
+            proof?.let { signed ->
+                Text("Signature", fontSize = 11.sp, color = SashyColors.DimWhite)
+                Text(
+                    signed.signature,
+                    modifier = Modifier.fillMaxWidth(),
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = SashyColors.ElectricGreen
+                )
+                Text(
+                    "View on Solana Explorer (devnet)",
+                    modifier = Modifier.clickable { uriHandler.openUri(signed.explorerUrl) },
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    textDecoration = TextDecoration.Underline,
+                    color = SashyColors.SolanaPurple
+                )
+                Text("SHA-256 (the on-chain memo)", fontSize = 11.sp, color = SashyColors.DimWhite)
+                Text(
+                    signed.hash,
+                    modifier = Modifier.fillMaxWidth(),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = SashyColors.White
+                )
+                // The exact bytes that were hashed, in full - so the hash above can be
+                // recomputed by hand rather than taken on trust.
+                Text("Exact string that was hashed", fontSize = 11.sp, color = SashyColors.DimWhite)
+                Text(
+                    signed.canonical,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(SashyColors.PureBlack, RoundedCornerShape(8.dp))
+                        .padding(8.dp),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = SashyColors.DimWhite
+                )
+                TextButton(onClick = { onCopyProof(signed) }) {
+                    Text("Copy proof", color = SashyColors.ElectricGreen)
+                }
             }
         }
     }

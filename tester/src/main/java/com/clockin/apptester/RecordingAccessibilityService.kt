@@ -10,6 +10,7 @@ import com.clockin.apptester.model.RecordedStep
 import com.clockin.apptester.model.ReplayResult
 import com.clockin.apptester.model.SavedFlow
 import com.clockin.apptester.model.SavedFlowStore
+import com.clockin.apptester.model.buildScrubbedStep
 import com.clockin.apptester.model.hasNoIdentity
 import com.clockin.apptester.model.primaryLabel
 import kotlinx.coroutines.CoroutineScope
@@ -198,7 +199,7 @@ class RecordingAccessibilityService : AccessibilityService() {
                 return
             }
             RecorderBridge.appendStep(
-                RecordedStep(
+                buildScrubbedStep(
                     packageName = stepPackageName,
                     className = eventClass,
                     resourceId = null,
@@ -216,7 +217,7 @@ class RecordingAccessibilityService : AccessibilityService() {
         // A password field's tap is still recorded (class, resource ID), but its text and
         // contentDescription are never read, logged or saved.
         val isPassword = source.isPassword
-        val step = RecordedStep(
+        val step = buildScrubbedStep(
             packageName = stepPackageName,
             className = source.className?.toString(),
             resourceId = resourceId,

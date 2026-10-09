@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import com.clockin.apptester.model.RecordedStep
 import com.clockin.apptester.model.ReplayResult
 import com.clockin.apptester.model.SavedFlow
+import com.clockin.apptester.model.SENSITIVE_MARKER
 import com.clockin.apptester.model.hasNoIdentity
 import com.clockin.apptester.model.postTapDetail
 import com.clockin.apptester.model.primaryLabel
@@ -118,6 +119,21 @@ private fun formatSavedTime(epochMillis: Long): String {
     return Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).format(formatter)
 }
 
+private const val FIRST_RUN_NOTICE =
+    "This tool can read what is on screen in other apps while recording. " +
+        "Don't record while entering passwords or payment details. " +
+        "Recordings stay on this device."
+private const val PREFS_NAME = "tester_prefs"
+private const val PREF_NOTICE_ACKNOWLEDGED = "first_run_notice_acknowledged"
+
+private fun hasAcknowledgedNotice(context: Context): Boolean =
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getBoolean(PREF_NOTICE_ACKNOWLEDGED, false)
+
+private fun markNoticeAcknowledged(context: Context) {
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+        .putBoolean(PREF_NOTICE_ACKNOWLEDGED, true).apply()
+}
+
 private fun buildStepsReportText(steps: List<RecordedStep>): String =
     if (steps.isEmpty()) {
         "(no recorded steps)"
@@ -125,7 +141,8 @@ private fun buildStepsReportText(steps: List<RecordedStep>): String =
         steps.mapIndexed { index, step ->
             val warning = if (step.hasNoIdentity()) "⚠ " else ""
             val postTap = step.postTapDetail()
-            val suffix = if (postTap != null) " (shows \"$postTap\" after tap)" else ""
+            val suffix = (if (postTap != null) " (shows \"$postTap\" after tap)" else "") +
+                (if (step.labelRemoved) " $SENSITIVE_MARKER" else "")
             "${index + 1}. $warning${step.primaryLabel()} | ${step.packageName}$suffix"
         }.joinToString("\n")
     }
@@ -193,6 +210,7 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
     val walletMessage by WalletConnector.message.collectAsState()
     var flowPendingDelete by remember { mutableStateOf<SavedFlow?>(null) }
     var flowPendingRename by remember { mutableStateOf<SavedFlow?>(null) }
+    var showFirstRunNotice by remember { mutableStateOf(false) }
 
     val displayFlows = remember(savedFlows) { buildFlowDisplayList(savedFlows) }
     val activeDisplay = displayFlows.firstOrNull { it.flow.id == activeFlowId }
@@ -244,7 +262,12 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
         val (startButtonLabel, startButtonAction) = when (mode) {
             RecorderMode.RECORDING -> "Stop Recording" to { RecorderBridge.stopRecordingManually() }
             RecorderMode.COUNTDOWN -> "Cancel Countdown" to { RecorderBridge.cancelCountdown() }
-            else -> "Record (normal touch)" to { RecorderBridge.startRecordingCountdown() }
+            else -> "Record (normal touch)" to {
+                // First recording ever: the notice goes first, and the countdown only
+                // starts from the dialog's own button, never behind it.
+                if (hasAcknowledgedNotice(context)) RecorderBridge.startRecordingCountdown()
+                else showFirstRunNotice = true
+            }
         }
 
         Button(
@@ -422,7 +445,8 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
             ) {
                 itemsIndexed(steps) { index, step ->
                     val postTap = step.postTapDetail()
-                    val suffix = if (postTap != null) " (shows \"$postTap\" after tap)" else ""
+                    val suffix = (if (postTap != null) " (shows \"$postTap\" after tap)" else "") +
+                        (if (step.labelRemoved) " $SENSITIVE_MARKER" else "")
                     val warning = if (step.hasNoIdentity()) "⚠ " else ""
                     Text(
                         "${index + 1}. $warning${step.primaryLabel()} | ${step.packageName}$suffix",
@@ -513,6 +537,33 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
                 )
             }
         }
+    }
+
+    if (showFirstRunNotice) {
+        AlertDialog(
+            // Tapping outside or pressing back closes it without acknowledging and without
+            // starting anything - only the button below does either.
+            onDismissRequest = { showFirstRunNotice = false },
+            title = { Text("Before you record") },
+            text = { Text(FIRST_RUN_NOTICE) },
+            confirmButton = {
+                TextButton(onClick = {
+                    markNoticeAcknowledged(context)
+                    showFirstRunNotice = false
+                    RecorderBridge.startRecordingCountdown()
+                }) {
+                    Text("Got it", color = SashyColors.ElectricGreen)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showFirstRunNotice = false }) {
+                    Text("Cancel", color = SashyColors.White)
+                }
+            },
+            containerColor = SashyColors.CardBlack,
+            titleContentColor = SashyColors.White,
+            textContentColor = SashyColors.DimWhite
+        )
     }
 
     flowPendingDelete?.let { flow ->

@@ -563,3 +563,12 @@ Capture and replay changed under explicit authorization for this task.
 - **WebView**: untested. Chromium exposes a page to accessibility as virtual nodes created on demand for a service, so text may be readable, but Android resource IDs may be missing and click events/matching inside one are unverified on this device. README Limits says so.
 
 Unchanged: `findNode` matching, saved flows, the watchdog, volume-down, touch exploration handling, signing/MWA code.
+
+### First-run notice + sensitive-label filter (Oct 9, applied - not yet verified on-device)
+Capture and save changed under explicit authorization for this task.
+
+- **First-run notice**: tapping Record when `tester_prefs` (private SharedPreferences) has no `first_run_notice_acknowledged` shows a dialog with the fixed text ("This tool can read what is on screen in other apps while recording. Don't record while entering passwords or payment details. Recordings stay on this device."). "Got it" stores the flag and only then calls `startRecordingCountdown()`; Cancel / tap-outside closes it without storing anything or starting anything. No countdown ever runs behind it. Never shown again once acknowledged.
+- **Label filter**: every step is built through `buildScrubbedStep` (`model/RecordedStep.kt`), on both the normal path and the event-only path. `text`, `contentDescription`, `preTapText` and `preTapContentDescription` become null if they have 5+ digits in a row, look like an email, or contain a whitespace-separated token over 20 chars that is entirely hex or base58 characters. Resource IDs are never filtered. The removed value is never logged or kept (the in-memory label cache still holds raw values transiently, as before, and is cleared per session). Steps are marked "⚠ sensitive-looking label removed" in the step list, Copy and Copy Report.
+- **Format note**: to make the marker survive save/load, `RecordedStep` gained `labelRemoved` (default false), written to JSON only when true and read with a default of false. This is one field beyond "null labels" and is flagged here deliberately; old files load unchanged and `formatVersion` is still 1.
+- **README**: Limits and Privacy rewritten to match (password-field wording fixed, "taps seen but not recorded", auto-save/no review step, Order Online limit sentence, sensitive-label line); Roadmap gained the Save/Discard review, editable protected list and guided capture.
+- Matching logic, the watchdog, volume-down, touch exploration and all MWA/signing code are untouched.

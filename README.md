@@ -51,11 +51,16 @@ It replaces the part where I re-tap the same flow by hand.
   page. Roadmap: record the page URL and relaunch it.
 - Controls that don't use standard Android click handling (Jetpack Compose
   screens, and possibly custom-drawn views and games) don't send a click event,
-  so they can't be recorded automatically. Taps that navigate to a new screen are
-  recorded from the tap event's own details when the tapped element is already
-  gone. Replay always starts from the app's launch screen and doesn't scroll, so
+  so they can't be recorded automatically. Some controls don't announce taps to
+  accessibility services, so they can't be recorded. In testing, the Order Online
+  button of a food-ordering app was one. The tool counts taps it saw but couldn't
+  use, and it can't see taps the app never announces. Replay always starts from the app's launch screen and doesn't scroll, so
   apps whose screens depend on state (opening hours, login, scroll position) can
   show a different screen on replay.
+- A label that looks sensitive (more than 4 digits in a row, an email address, or
+  a hex or base58-looking string over 20 characters) is removed from the step and
+  the step is marked. A step whose only label was removed can't be matched by that
+  label on replay.
 - Replay performs the real actions it recorded — real taps, on the real app.
   It is not a simulation.
 - Wallet-state detection (connect dialog, approval screen, rejection,
@@ -127,9 +132,18 @@ To see the tester catch a break:
   marks as a password field.
 - **Limits you should know about.** The accessibility service sees every app, not
   just the one you are testing, so a recording that passes through another app can
-  capture that app's on-screen labels too. There is no filtering of password or PIN
-  fields: a PIN pad built from ordinary buttons in an unlisted app would be recorded
-  like any other taps. Use a throwaway devnet wallet rather than a real one.
+  capture that app's on-screen labels too. Real password fields are skipped. A PIN
+  pad built from ordinary buttons in an unlisted app can still be recorded, except
+  that labels that look like digit runs are removed. Use a throwaway devnet wallet
+  rather than a real one.
+- **Taps seen but not recorded.** If a tap reaches the tester but carries too little
+  to become a step, it is counted and the count is shown ("N taps seen but not
+  recorded"). Taps an app never announces to accessibility can't be counted.
+- **Saving and deleting.** Recordings save automatically when you stop, and a flow
+  can be deleted from the list. There is no review step yet.
+- **First-run notice.** The first time you record, a one-time dialog explains that
+  the tool can read other apps' screens while recording. Recording starts only
+  after you dismiss it with "Got it".
 
 ## Roadmap
 
@@ -137,6 +151,9 @@ To see the tester catch a break:
   into a full replay.
 - A state graph for flows, instead of a flat step list.
 - Recording Jetpack Compose apps.
+- Save and Discard review step after recording.
+- User-editable protected-app list.
+- Guided capture, where you pick a control from a list of what's on screen.
 - Wallet-state detection: connect dialog, approval screen, rejection,
   insufficient funds.
 - Real devnet SKR test transactions wired into replay.

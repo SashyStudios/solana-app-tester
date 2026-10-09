@@ -147,6 +147,7 @@ object SavedFlowStore {
         obj.putNullable("contentDescription", contentDescription)
         obj.putNullable("preTapText", preTapText)
         obj.putNullable("preTapContentDescription", preTapContentDescription)
+        if (labelRemoved) obj.put("labelRemoved", true)
         return obj
     }
 
@@ -157,7 +158,8 @@ object SavedFlowStore {
         text = optNullableString("text"),
         contentDescription = optNullableString("contentDescription"),
         preTapText = optNullableString("preTapText"),
-        preTapContentDescription = optNullableString("preTapContentDescription")
+        preTapContentDescription = optNullableString("preTapContentDescription"),
+        labelRemoved = optBoolean("labelRemoved", false)
     )
 
     /** Omits the key entirely rather than writing a JSON null - equally parseable,

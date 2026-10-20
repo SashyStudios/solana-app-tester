@@ -6,6 +6,9 @@ Record your app once. Check it again with one tap.
 
 Built for the CLOCK IN Solana Mobile hackathon.
 
+**Download:** a prebuilt, signed tester APK is on the
+[Releases page](https://github.com/SashyStudios/solana-app-tester/releases).
+
 ## Why I built it
 
 I build apps alone. For a long time I couldn't get anyone to test them. Family
@@ -75,6 +78,39 @@ It replaces the part where I re-tap the same flow by hand.
 - When a step fails, the tester reports an observable difference — the
   element it expected is gone, renamed, or moved. It does not know what code
   change caused that, and doesn't claim to.
+
+## Build
+
+Requirements:
+
+- JDK 17 or newer. Android Studio's bundled JDK works; point `JAVA_HOME` at it.
+- Android SDK. Set `ANDROID_HOME`, or create `local.properties` in the project root
+  containing `sdk.dir=<path to your Android SDK>`.
+- A phone or emulator with USB debugging enabled, for installing.
+
+Build everything:
+
+```
+./gradlew :tester:assembleDebug :app:assembleV1Debug :app:assembleV2Debug
+```
+
+The first build downloads dependencies and can take around 10 minutes.
+
+APKs end up here:
+
+- Tester: `tester/build/outputs/apk/debug/tester-debug.apk`
+- Demo app v1: `app/build/outputs/apk/v1/debug/app-v1-debug.apk`
+- Demo app v2: `app/build/outputs/apk/v2/debug/app-v2-debug.apk`
+
+Install the tester and the v1 demo app:
+
+```
+adb install -r tester/build/outputs/apk/debug/tester-debug.apk
+adb install -r app/build/outputs/apk/v1/debug/app-v1-debug.apk
+```
+
+To switch the demo app between versions, use `scripts\install-demo-v1.bat` and
+`scripts\install-demo-v2.bat`.
 
 ## How to run it
 

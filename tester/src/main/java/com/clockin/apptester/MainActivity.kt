@@ -63,6 +63,7 @@ import com.clockin.apptester.model.unlabeledStepWarning
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextDecoration
 import com.clockin.apptester.solana.DevnetConfig
+import com.clockin.apptester.solana.ReportHash
 import com.clockin.apptester.solana.ReportSigner
 import com.clockin.apptester.solana.SignedProof
 import com.clockin.apptester.solana.WalletConnection
@@ -193,8 +194,17 @@ private fun buildFullReportText(
     steps: List<RecordedStep>,
     log: List<String>,
     flowName: String?,
-    proof: SignedProof?
+    proof: SignedProof?,
+    lastResult: ReplayResult?
 ): String {
+    // The proof is for whatever result was signed, which may not be the current one. Only
+    // print its signature when the exact canonical string matches what would be signed now.
+    val currentCanonical = lastResult?.let { result ->
+        steps.firstOrNull()?.packageName?.let { target ->
+            ReportHash.canonicalString(flowName ?: "(unsaved recording)", target, steps, result)
+        }
+    }
+    val proofMatches = proof != null && proof.canonical == currentCanonical
     val now = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").format(LocalDateTime.now())
     val appLabel = flowName ?: steps.firstOrNull()?.packageName ?: "(none)"
     return buildString {
@@ -210,14 +220,20 @@ private fun buildFullReportText(
         appendLine()
         appendLine("-- Replay log --")
         append(if (log.isEmpty()) "(no replay yet)" else log.joinToString("\n"))
-        // Only ever present when a signature actually came back from the wallet.
-        proof?.let {
+        if (proof != null && proofMatches) {
             appendLine()
             appendLine()
             appendLine("-- Signed on devnet --")
-            appendLine("Signature: ${it.signature}")
-            appendLine("SHA-256 (the on-chain memo): ${it.hash}")
-            append("Explorer: ${it.explorerUrl}")
+            appendLine("Signature: ${proof.signature}")
+            appendLine("SHA-256 (the on-chain memo): ${proof.hash}")
+            append("Explorer: ${proof.explorerUrl}")
+        } else if (proof != null) {
+            val lines = proof.canonical.lines()
+            val signedFlow = lines.firstOrNull { it.startsWith("flow: ") }?.removePrefix("flow: ") ?: "(unknown)"
+            val signedResult = lines.lastOrNull { it.startsWith("result: ") }?.removePrefix("result: ") ?: "(unknown)"
+            appendLine()
+            appendLine()
+            append("No signature for this result. Last signed: $signedFlow, $signedResult.")
         }
     }
 }
@@ -554,7 +570,7 @@ private fun TesterScreen(sender: ActivityResultSender, onOpenAccessibilitySettin
             Button(
                 onClick = {
                     clipboardManager.setText(
-                        AnnotatedString(buildFullReportText(steps, log, activeFlowName, proof))
+                        AnnotatedString(buildFullReportText(steps, log, activeFlowName, proof, lastResult))
                     )
                     Toast.makeText(context, "Report copied", Toast.LENGTH_SHORT).show()
                 },

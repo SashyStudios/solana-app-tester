@@ -590,3 +590,6 @@ The tester can now publish a hash of its own replay result to devnet as an SPL M
 - `./gradlew :tester:assembleRelease` succeeds. `apksigner verify` passes; certificate CN=Sashy Studios, SHA-256 `12fa3ce44dcaf08d24c6951de700d2e5720acc0d5397135b1c1f1a47a8af9f47` (not the Android debug certificate).
 - The release APK was NOT installed on the phone: it can't update a debug-signed install, and uninstalling would delete saved flows. APK: `tester/build/outputs/apk/release/tester-release.apk`.
 - Capture, matching, replay, saved flows, watchdog, volume-down, touch exploration, PackageGuard, signing-transaction code and the demo app are untouched.
+
+### Copy report: signature must match the result (Oct 19, applied - not yet verified on-device)
+Copy report now prints the "Signed on devnet" section only when the stored proof's canonical string equals the canonical string of the current result (same `ReportHash.canonicalString` inputs the Sign button uses). Otherwise it leaves the section out and adds "No signature for this result. Last signed: <flow name>, <result line>." Break explanation line 1 drops "(recorded as '...')" when it would repeat the expected text. Report text only; signing, capture, matching, replay and the rest are untouched.

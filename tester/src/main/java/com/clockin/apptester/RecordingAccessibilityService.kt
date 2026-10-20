@@ -652,8 +652,9 @@ class RecordingAccessibilityService : AccessibilityService() {
             wordsOf(element.label).firstOrNull { it in recordedWords }?.let { word -> element to word }
         }
 
-        val line1 = "Step ${index + 1}/${steps.size} FAILED: expected ${step.resourceId ?: "(no id)"} " +
-            "(recorded as '${step.primaryLabel()}'), not found."
+        val expectedText = step.resourceId ?: "(no id)"
+        val recordedAs = if (step.primaryLabel() == expectedText) "" else " (recorded as '${step.primaryLabel()}')"
+        val line1 = "Step ${index + 1}/${steps.size} FAILED: expected $expectedText$recordedAs, not found."
 
         val namedInLine2 = mutableSetOf<ClickableElement>()
         val line2 = when {

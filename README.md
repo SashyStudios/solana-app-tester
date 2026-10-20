@@ -113,6 +113,21 @@ To see the tester catch a break:
    ID and label both changed. The tester's report should name
    `btnStatusCheck` / "Run check" as the likely rename.
 
+## Building a release APK
+
+Run `./gradlew :tester:assembleRelease`. Signing reads four Gradle properties that you
+define in your user-level `gradle.properties` (never in this repo):
+
+- `SASHY_KEYSTORE_FILE`
+- `SASHY_KEYSTORE_PASSWORD`
+- `SASHY_KEY_ALIAS`
+- `SASHY_KEY_PASSWORD`
+
+If any are missing, a release build stops with a message naming them. Debug builds don't
+need them. Minification and resource shrinking are off. A release-signed APK can't update
+a debug-signed install (and vice versa), so switching means uninstalling first, which
+deletes saved flows. Output: `tester/build/outputs/apk/release/tester-release.apk`.
+
 ## Privacy and safety
 
 - **Recordings stay on your device.** Flows are saved as JSON in the app's own

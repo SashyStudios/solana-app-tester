@@ -17,9 +17,40 @@ android {
         versionName "1.0"
     }
 
+    // Release signing. Only the property NAMES live here; the values come from the
+    // user-level gradle.properties (~/.gradle/gradle.properties). Missing properties only
+    // fail when a release build is actually requested, so debug builds and a fresh clone
+    // still work without a keystore.
+    def sashyProps = ['SASHY_KEYSTORE_FILE', 'SASHY_KEYSTORE_PASSWORD',
+                      'SASHY_KEY_ALIAS', 'SASHY_KEY_PASSWORD']
+    def missingSashyProps = sashyProps.findAll { !project.hasProperty(it) }
+    def releaseRequested = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }
+    if (releaseRequested && !missingSashyProps.isEmpty()) {
+        throw new GradleException("Release signing is not configured. Missing Gradle " +
+                "properties: ${missingSashyProps.join(', ')}. Define them in your user-level " +
+                "gradle.properties (see 'Building a release APK' in README.md).")
+    }
+
+    signingConfigs {
+        release {
+            if (missingSashyProps.isEmpty()) {
+                storeFile file(project.property('SASHY_KEYSTORE_FILE'))
+                storePassword project.property('SASHY_KEYSTORE_PASSWORD')
+                keyAlias project.property('SASHY_KEY_ALIAS')
+                keyPassword project.property('SASHY_KEY_PASSWORD')
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (missingSashyProps.isEmpty()) {
+                signingConfig signingConfigs.release
+            }
+            // Minification and resource shrinking stay OFF so the accessibility service
+            // and Solana code behave exactly like debug.
             minifyEnabled false
+            shrinkResources false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

@@ -54,3 +54,6 @@ google-services.json
 *.json.key
 test-wallet-*.json
 setup/skr-mint-authority.json
+
+keystore.properties
+*.keystore.properties
